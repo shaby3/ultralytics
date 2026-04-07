@@ -129,5 +129,8 @@ erasing: 0.4 # (float) random erasing probability for classification (0.0–1.0)
 # Custom config.yaml ---------------------------------------------------------------------------------------------------
 cfg: # (str, optional) path to a config.yaml that overrides defaults
 
+# Knowledge Distillation ------------------------------------------------------------------------------------------------
+distill_cfg: # (str, optional) path to distillation config YAML; enables KD when set
+
 # Tracker settings ------------------------------------------------------------------------------------------------------
 tracker: botsort.yaml # (str) tracker config file: botsort.yaml or bytetrack.yaml

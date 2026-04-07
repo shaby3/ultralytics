@@ -1246,3 +1246,32 @@ class TVPSegmentLoss(TVPDetectLoss):
         vp_loss = self.vp_criterion(preds, batch)
         cls_loss = vp_loss[0][2]
         return cls_loss, vp_loss[1]
+
+
+class KDFeatureLoss:
+    """Feature-level Knowledge Distillation loss.
+
+    Computes the mean loss across all distillation points between aligned student features
+    and teacher features. Default loss function is MSE.
+    """
+
+    def __init__(self, loss_fn=None):
+        """Initialize KDFeatureLoss.
+
+        Args:
+            loss_fn (nn.Module, optional): Loss function to use. Defaults to nn.MSELoss(reduction="mean").
+        """
+        self.loss_fn = loss_fn or nn.MSELoss(reduction="mean")
+
+    def __call__(self, student_feats, teacher_feats):
+        """Compute mean feature distillation loss across all distillation points.
+
+        Args:
+            student_feats (list[torch.Tensor]): Aligned student feature maps.
+            teacher_feats (list[torch.Tensor]): Teacher feature maps (will be detached).
+
+        Returns:
+            torch.Tensor: Scalar loss value.
+        """
+        loss = sum(self.loss_fn(sf, tf.detach()) for sf, tf in zip(student_feats, teacher_feats))
+        return loss / len(student_feats)

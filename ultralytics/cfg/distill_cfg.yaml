@@ -1,0 +1,25 @@
+# Knowledge Distillation config for YOLOv8
+# Distills 2nd conv output from box (cv2) and cls (cv3) branches across 3 scales
+
+teacher:
+  model: yolov8s.pt
+  layers:
+    - "model.22.cv2.0.1"   # box branch scale0 2nd conv
+    - "model.22.cv2.1.1"   # box branch scale1 2nd conv
+    - "model.22.cv2.2.1"   # box branch scale2 2nd conv
+    - "model.22.cv3.0.1"   # cls branch scale0 2nd conv
+    - "model.22.cv3.1.1"   # cls branch scale1 2nd conv
+    - "model.22.cv3.2.1"   # cls branch scale2 2nd conv
+
+student:
+  layers:
+    - "model.22.cv2.0.1"
+    - "model.22.cv2.1.1"
+    - "model.22.cv2.2.1"
+    - "model.22.cv3.0.1"
+    - "model.22.cv3.1.1"
+    - "model.22.cv3.2.1"
+
+aligner: ConvAligner
+loss: mse
+weight: 1.0
