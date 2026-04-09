@@ -26,7 +26,9 @@ Neck-level Feature KD 실험. Teacher(yolov8s)의 Neck output(P3/P4/P5)을 Stude
 | loss | MSE |
 | weight | 1.0 |
 
-## 결과 (19/50 에폭)
+## 결과 (50/50 에폭 완료)
 | mAP50 | mAP50-95 | Precision | Recall |
 |-------|----------|-----------|--------|
-| 0.757 | 0.537 | 0.763 | 0.669 |
+| 0.821 | 0.619 | 0.803 | 0.754 |
+
+> 다른 실험과의 비교는 [`../EXPERIMENTS.md`](../EXPERIMENTS.md) 참고.
