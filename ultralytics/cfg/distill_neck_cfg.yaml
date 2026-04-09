@@ -1,0 +1,19 @@
+# Neck-level Knowledge Distillation config for YOLOv8
+# Distills neck output features (P3, P4, P5) that feed into the detection head
+
+teacher:
+  model: yolov8s.pt
+  layers:
+    - 15   # P3/8 — neck output, small scale
+    - 18   # P4/16 — neck output, medium scale
+    - 21   # P5/32 — neck output, large scale
+
+student:
+  layers:
+    - 15
+    - 18
+    - 21
+
+aligner: ConvAligner
+loss: mse
+weight: 1.0

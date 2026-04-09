@@ -4,6 +4,8 @@
 
 import torch.nn as nn
 
+from ultralytics.nn.modules.conv import Conv
+
 
 class ConvAligner(nn.Module):
     """1x1 Conv -> ReLU -> 1x1 Conv. Maps student features to teacher feature dimensions."""
@@ -22,6 +24,52 @@ class ConvAligner(nn.Module):
             nn.Conv2d(in_channels, mid_channels, 1, bias=False),
             nn.ReLU(inplace=True),
             nn.Conv2d(mid_channels, out_channels, 1, bias=False),
+        )
+
+    def forward(self, x):
+        """Forward pass through alignment layers."""
+        return self.align(x)
+
+
+class ConvBNAligner(nn.Module):
+    """Conv(BN+SiLU) -> Conv2d(linear). Maps student features to teacher feature dimensions using YOLO Conv module."""
+
+    def __init__(self, in_channels, out_channels, mid_channels=None):
+        """Initialize ConvBNAligner.
+
+        Args:
+            in_channels (int): Input channels (student feature).
+            out_channels (int): Output channels (teacher feature).
+            mid_channels (int, optional): Intermediate channels. Defaults to out_channels.
+        """
+        super().__init__()
+        mid_channels = mid_channels or out_channels
+        self.align = nn.Sequential(
+            Conv(in_channels, mid_channels, k=1),  # Conv2d + BN + SiLU
+            nn.Conv2d(mid_channels, out_channels, 1),  # Conv2d only (linear projection)
+        )
+
+    def forward(self, x):
+        """Forward pass through alignment layers."""
+        return self.align(x)
+
+
+class ConvBNSiLUAligner(nn.Module):
+    """Conv(BN+SiLU) -> Conv(BN+SiLU). Both layers include BN+SiLU to match teacher feature distribution."""
+
+    def __init__(self, in_channels, out_channels, mid_channels=None):
+        """Initialize ConvBNSiLUAligner.
+
+        Args:
+            in_channels (int): Input channels (student feature).
+            out_channels (int): Output channels (teacher feature).
+            mid_channels (int, optional): Intermediate channels. Defaults to out_channels.
+        """
+        super().__init__()
+        mid_channels = mid_channels or out_channels
+        self.align = nn.Sequential(
+            Conv(in_channels, mid_channels, k=1),  # Conv2d + BN + SiLU
+            Conv(mid_channels, out_channels, k=1),  # Conv2d + BN + SiLU
         )
 
     def forward(self, x):
