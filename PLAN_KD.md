@@ -495,12 +495,29 @@ trainer.train()
   - **테스트**: `from ultralytics.engine import create_distiller` ✅
   - **테스트 파일**: `tests/test_kd_phase5.py`
 
-### Phase 6: End-to-End 검증
-- [ ] **TODO-16**: 전체 distillation 학습 테스트 (보류 - 다음 세션에서 진행)
-  - Teacher: yolov8s.pt, Student: yolov8n.yaml, Data: VOC.yaml
+### Phase 6: End-to-End 검증 (Baseline vs KD 비교)
+
+- [x] **TODO-16**: Baseline — Student 단독 학습 ✅
+  - Student: yolov8n.pt, Data: VOC.yaml, 50 epochs, batch=16
+  - KD 없이 순수 student만 학습 (distill_cfg 미지정)
+  - **결과 저장**: `runs/detect/baseline_yolov8n/`
+  - **테스트**: 체크포인트 존재, best.pt 로드/추론 동작 확인 (4/4 PASSED)
+
+- [x] **TODO-17**: KD — Distillation 학습 ✅
+  - Teacher: yolov8s.pt, Student: yolov8n.pt, Data: VOC.yaml, 50 epochs, batch=32
   - distill_cfg.yaml: cv2/cv3 2번째 conv 증류 (6 points)
-  - 5 epoch 학습 → checkpoint 저장 → student 추론
-  - workers=4로 설정 (메모리 이슈 방지)
-  - venv 활성화 필요: `source venv/Scripts/activate` (CUDA torch 설치됨)
-  - **테스트**: 학습 완료, teacher frozen, checkpoint 호환, 추론 동작
-  - **테스트 파일**: `tests/test_kd_phase6.py` (workers=4 추가됨)
+  - **결과 저장**: `runs/detect/kd_yolov8n/`
+  - **테스트**: 체크포인트 존재, kd_loss 컬럼, 표준 YOLO 호환, 추론 동작, aligner 저장 확인 (6/6 PASSED)
+
+- [x] **TODO-18**: 성능 비교 분석 ✅
+  - Baseline vs KD 모델의 VOC val set 평가 (mAP50, mAP50-95)
+  - 비교 결과 (best epoch 기준):
+    | 항목 | Baseline (yolov8n) | KD (yolov8n + yolov8s teacher) | 차이 |
+    |------|-------------------|-------------------------------|------|
+    | mAP50 | 0.8180 | 0.8448 | **+0.0268** |
+    | mAP50-95 | 0.6090 | 0.6396 | **+0.0306** |
+    | 학습 시간 | 8,261초 (2.29h) | 9,685초 (2.69h) | +1,425초 |
+    | 모델 크기 | 5.95 MB | 5.95 MB | 동일 |
+  - **결론**: KD 모델이 mAP50 +2.68%p, mAP50-95 +3.06%p 향상. 학습 시간은 약 17% 증가하나 최종 모델 크기는 동일 (student만 저장)
+  - **테스트**: KD mAP50/mAP50-95가 baseline 대비 향상 검증 (4/4 PASSED)
+  - **테스트 파일**: `tests/test_kd_phase6.py` (총 14개 테스트 ALL PASSED)

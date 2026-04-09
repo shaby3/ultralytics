@@ -186,6 +186,17 @@ def create_distiller(trainer_cls):
                 aligner_cls=aligner_map[aligner_name],
             ).to(self.device)
 
+        def _kd_progress_string(self):
+            """Return progress string header with kd_loss column inserted before Instances."""
+            return ("\n" + "%11s" * (5 + len(self.loss_names))) % (
+                "Epoch",
+                "GPU_mem",
+                *self.loss_names,
+                "kd_loss",
+                "Instances",
+                "Size",
+            )
+
         def _setup_kd_loss(self):
             """Initialize KD feature loss function."""
             from ultralytics.utils.loss import KDFeatureLoss
@@ -293,6 +304,7 @@ def create_distiller(trainer_cls):
 
             self._build_train_pipeline()
             self.validator = self.get_validator()
+            self.tkd_loss = None
             self.ema = ModelEMA(self.model)
             if RANK in {-1, 0}:
                 metric_keys = self.validator.metrics.keys + self.label_loss_items(prefix="val")
@@ -355,9 +367,10 @@ def create_distiller(trainer_cls):
                     self.train_loader.reset()
 
                 if RANK in {-1, 0}:
-                    LOGGER.info(self.progress_string())
+                    LOGGER.info(self._kd_progress_string())
                     pbar = TQDM(enumerate(self.train_loader), total=nb)
                 self.tloss = None
+                self.tkd_loss = None
                 for i, batch in pbar:
                     self.run_callbacks("on_train_batch_start")
                     ni = i + nb * epoch
@@ -397,13 +410,15 @@ def create_distiller(trainer_cls):
                             # Align student features and compute KD loss
                             aligned_feats = unwrap_model(self.model).aligner(self._student_feats)
                             kd_loss = self.kd_loss_fn(aligned_feats, self._teacher_feats)
-                            self.loss = loss.sum() + self.kd_weight * kd_loss
+                            self.loss = loss.sum() + self.kd_weight * kd_loss * batch["img"].shape[0]
 
                             if RANK != -1:
                                 self.loss *= self.world_size
                             self.tloss = (
                                 self.loss_items if self.tloss is None else (self.tloss * i + self.loss_items) / (i + 1)
                             )
+                            kd_val = kd_loss.detach().item()
+                            self.tkd_loss = kd_val if self.tkd_loss is None else (self.tkd_loss * i + kd_val) / (i + 1)
 
                         # Backward
                         self.scaler.scale(self.loss).backward()
@@ -442,11 +457,12 @@ def create_distiller(trainer_cls):
                     if RANK in {-1, 0}:
                         loss_length = self.tloss.shape[0] if len(self.tloss.shape) else 1
                         pbar.set_description(
-                            ("%11s" * 2 + "%11.4g" * (2 + loss_length))
+                            ("%11s" * 2 + "%11.4g" * (3 + loss_length))
                             % (
                                 f"{epoch + 1}/{self.epochs}",
                                 f"{self._get_memory():.3g}G",
                                 *(self.tloss if loss_length > 1 else torch.unsqueeze(self.tloss, 0)),
+                                self.tkd_loss or 0,
                                 batch["cls"].shape[0],
                                 batch["img"].shape[-1],
                             )
@@ -485,7 +501,8 @@ def create_distiller(trainer_cls):
 
                 self.nan_recovery_attempts = 0
                 if RANK in {-1, 0}:
-                    self.save_metrics(metrics={**self.label_loss_items(self.tloss), **self.metrics, **self.lr})
+                    kd_metrics = {"train/kd_loss": round(self.tkd_loss, 5)} if self.tkd_loss is not None else {}
+                    self.save_metrics(metrics={**self.label_loss_items(self.tloss), **kd_metrics, **self.metrics, **self.lr})
                     self.stop |= self.stopper(epoch + 1, self.fitness) or final_epoch
                     if self.args.time:
                         self.stop |= (time.time() - self.train_time_start) > (self.args.time * 3600)
@@ -538,6 +555,9 @@ def create_distiller(trainer_cls):
             # Extract student from EMA (unwrap DistillationWrapper)
             ema_model = unwrap_model(self.ema.ema)
             if isinstance(ema_model, DistillationWrapper):
+                # Clear hooks before deepcopy (EMA hooks are unused copies from training model)
+                for module in ema_model.student.modules():
+                    module._forward_hooks.clear()
                 student_ema = deepcopy(ema_model.student).half()
                 aligner_ema = deepcopy(ema_model.aligner).half()
             else:
