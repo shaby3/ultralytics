@@ -175,15 +175,40 @@ def create_distiller(trainer_cls):
         # --- Aligner & KD loss setup ---
 
         def _setup_aligner(self, student_channels, teacher_channels):
-            """Create MultiScaleAligner from student/teacher channel info."""
-            from ultralytics.nn.modules.aligner import ConvAligner, MultiScaleAligner
+            """Create MultiScaleAligner from student/teacher channel info.
+
+            Resolves the aligner class by name via attribute lookup on the aligner
+            module, so new aligner classes added to aligner.py are automatically
+            available without modifying this file.
+            """
+            from ultralytics.nn.modules import aligner as aligner_mod
 
             aligner_name = self.distill_cfg.get("aligner", "ConvAligner")
-            aligner_map = {"ConvAligner": ConvAligner}
-            self.aligner_module = MultiScaleAligner(
+
+            # MultiScaleAligner is a container that wraps per-point aligners — it has
+            # a different __init__ signature and is already used internally below, so
+            # it cannot itself be selected as a per-point aligner.
+            if aligner_name == "MultiScaleAligner":
+                raise ValueError(
+                    "MultiScaleAligner is a container and cannot be used as a per-point aligner. "
+                    "Choose a single-point aligner such as ConvAligner, ConvBNAligner, or ConvBNSiLUAligner."
+                )
+
+            aligner_cls = getattr(aligner_mod, aligner_name, None)
+            if not (isinstance(aligner_cls, type) and issubclass(aligner_cls, nn.Module)):
+                available = sorted(
+                    name
+                    for name in dir(aligner_mod)
+                    if isinstance(getattr(aligner_mod, name), type)
+                    and issubclass(getattr(aligner_mod, name), nn.Module)
+                    and name != "MultiScaleAligner"
+                )
+                raise ValueError(f"Unknown aligner '{aligner_name}'. Available aligners: {available}")
+
+            self.aligner_module = aligner_mod.MultiScaleAligner(
                 student_channels,
                 teacher_channels,
-                aligner_cls=aligner_map[aligner_name],
+                aligner_cls=aligner_cls,
             ).to(self.device)
 
         def _kd_progress_string(self):
