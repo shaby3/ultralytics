@@ -149,7 +149,9 @@ dmypy.json
 
 # datasets and projects (ignore /datasets dir at root only to allow for docs/en/datasets dir)
 /datasets
-runs/
+runs/*
+!runs/detect/
+runs/detect/**/weights/
 wandb/
 .DS_Store
 
@@ -203,6 +205,13 @@ calibration_*.npy
 # Training logs
 args.yaml
 results.csv
+
+# Allow experiment results in runs/detect/ (weights excluded above)
+!runs/detect/*/
+!runs/detect/**/*.jpg
+!runs/detect/**/*.png
+!runs/detect/**/args.yaml
+!runs/detect/**/results.csv
 
 # 추가
 .claude/settings.local.json
