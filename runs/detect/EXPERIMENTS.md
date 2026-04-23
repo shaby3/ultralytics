@@ -21,12 +21,14 @@ YOLOv8n + VOC 기반 KD 실험 결과 모음. 각 실험의 상세 세팅은 해
 | [baseline_yolov8n](./baseline_yolov8n/) | — | 16 | 0.817 | 0.612 | 0.804 | 0.745 |
 | [neck_kd_yolov8n](./neck_kd_yolov8n/) | Neck output P3/P4/P5 (layer 15/18/21) | 32 | 0.821 | 0.619 | 0.803 | 0.754 |
 | [kd_yolov8n](./kd_yolov8n/) | Detect head cv2/cv3 2nd conv × 3 scale | 32 | **0.843** | **0.640** | **0.818** | **0.770** |
+| [kd_convbnsilu_yolov8n](./kd_convbnsilu_yolov8n/) | Detect head cv2/cv3 2nd conv × 3 scale (ConvBNSiLU aligner) | 32 | 0.843 | 0.643 | 0.807 | 0.777 |
 
 ## 베이스라인 대비 개선폭 (%p)
 | 실험 | ΔmAP50 | ΔmAP50-95 | ΔPrecision | ΔRecall |
 |------|--------|-----------|------------|---------|
 | neck_kd_yolov8n | +0.4 | +0.7 | -0.1 | +0.9 |
 | kd_yolov8n (head) | **+2.6** | **+2.8** | **+1.4** | **+2.5** |
+| kd_convbnsilu_yolov8n | +2.6 | +3.1 | +0.3 | +3.2 |
 
 ## 관찰
 - **Head KD가 Neck KD를 명확히 상회.** Detect head의 cv2(box)/cv3(cls) feature를 증류할 때 Student가 Teacher의 task-specific representation을 더 직접적으로 학습.
