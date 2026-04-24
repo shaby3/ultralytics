@@ -1,0 +1,28 @@
+# Knowledge Distillation config for YOLO26 (ConvBNSiLUAligner variant)
+# YOLO26: backbone 0-10, neck 11-22, Detect at layer 23 (inputs [16, 19, 22]).
+# Hooks 2nd conv output from box (cv2) / cls (cv3) branches across 3 scales.
+# end2end=True 환경에서도 cv2/cv3(one2many 경로)는 그대로 존재하고, one2one 분기는
+# x.detach()로 입력되어 backbone/neck 그래디언트와 분리되므로 별도 KD 불필요.
+
+teacher:
+  model: yolo26s.pt
+  layers:
+    - "model.23.cv2.0.1"   # box branch scale0 2nd conv
+    - "model.23.cv2.1.1"   # box branch scale1 2nd conv
+    - "model.23.cv2.2.1"   # box branch scale2 2nd conv
+    - "model.23.cv3.0.1"   # cls branch scale0 2nd conv
+    - "model.23.cv3.1.1"   # cls branch scale1 2nd conv
+    - "model.23.cv3.2.1"   # cls branch scale2 2nd conv
+
+student:
+  layers:
+    - "model.23.cv2.0.1"
+    - "model.23.cv2.1.1"
+    - "model.23.cv2.2.1"
+    - "model.23.cv3.0.1"
+    - "model.23.cv3.1.1"
+    - "model.23.cv3.2.1"
+
+aligner: ConvBNSiLUAligner
+loss: mse
+weight: 1.0

@@ -12,7 +12,8 @@
 
 path: NEU-DET
 train: images/train  # train images (relative to 'path') 1440 images
-val: images/val      # val images (relative to 'path') 360 images
+val: images/val      # val images (relative to 'path') 180 images (30 per class)
+test: images/test    # test images (relative to 'path') 180 images (30 per class, carved from val with seed=42)
 
 # Classes
 names:
@@ -26,6 +27,7 @@ names:
 # Download script/URL (optional) ---------------------------------------------------------------------------------------
 download: |
   import os
+  import random
   import shutil
   import xml.etree.ElementTree as ET
   from pathlib import Path
@@ -33,6 +35,9 @@ download: |
   import kagglehub
 
   from ultralytics.utils import TQDM
+
+  TEST_PER_CLASS = 30  # images carved from val into a held-out test split
+  SPLIT_SEED = 42      # fixed RNG seed so the val/test split is reproducible across runs
 
   def convert_label(xml_path, lbl_path, names):
       """Convert a Pascal VOC XML annotation to YOLO format (VOC convention: 1-indexed with -1 offset, drops difficult=1)."""
@@ -86,24 +91,56 @@ download: |
   # kagglehub returns .../versions/N/ and the actual dataset lives in a 'NEU-DET' subfolder
   src_root = cache_path / "NEU-DET" if (cache_path / "NEU-DET" / "train").is_dir() else cache_path
 
-  # Convert each split: flatten class subfolders + VOC XML → YOLO txt
-  for src_split, dst_split in (("train", "train"), ("validation", "val")):
-      ann_dir = src_root / src_split / "annotations"
-      img_src = src_root / src_split / "images"
-      img_dst = dir / "images" / dst_split
-      lbl_dst = dir / "labels" / dst_split
-      img_dst.mkdir(parents=True, exist_ok=True)
-      lbl_dst.mkdir(parents=True, exist_ok=True)
+  # Convert each split: flatten class subfolders + VOC XML → YOLO txt.
+  # Split membership is determined by IMAGE location, not XML location — the upstream Kaggle
+  # dataset has at least one file (crazing_240) where the image sits in train/images but the
+  # XML sits in validation/annotations, so keying off XML would drop that sample entirely.
+  img_roots = {"train": src_root / "train" / "images", "val": src_root / "validation" / "images"}
+  for dst_split in ("train", "val", "test"):
+      (dir / "images" / dst_split).mkdir(parents=True, exist_ok=True)
+      (dir / "labels" / dst_split).mkdir(parents=True, exist_ok=True)
 
-      for xml_path in TQDM(sorted(ann_dir.glob("*.xml")), desc=f"{src_split}→{dst_split}"):
+  for src_split in ("train", "validation"):
+      ann_dir = src_root / src_split / "annotations"
+      for xml_path in TQDM(sorted(ann_dir.glob("*.xml")), desc=f"{src_split} xmls"):
           filename = ET.parse(xml_path).getroot().find("filename").text
-          src_img = find_image(img_src, filename)
+          src_img, dst_split = None, None
+          for cand_split, img_src in img_roots.items():
+              src_img = find_image(img_src, filename)
+              if src_img is not None:
+                  dst_split = cand_split
+                  break
           if src_img is None:
               continue
-          dst_img = img_dst / src_img.name
+          dst_img = dir / "images" / dst_split / src_img.name
           if not dst_img.exists():
               shutil.copy2(src_img, dst_img)
-          convert_label(xml_path, (lbl_dst / src_img.name).with_suffix(".txt"), names)
+          convert_label(xml_path, (dir / "labels" / dst_split / src_img.name).with_suffix(".txt"), names)
+
+  # Carve a held-out test split out of val: TEST_PER_CLASS images per class, chosen with a
+  # fixed-seed RNG so reruns produce identical splits.
+  rng = random.Random(SPLIT_SEED)
+  val_img_dir = dir / "images" / "val"
+  val_lbl_dir = dir / "labels" / "val"
+  test_img_dir = dir / "images" / "test"
+  test_lbl_dir = dir / "labels" / "test"
+
+  by_class = {}
+  for img in val_img_dir.iterdir():
+      if not img.is_file():
+          continue
+      # class prefix: everything before the trailing "_<number>" (handles "rolled-in_scale_241.jpg")
+      cls = img.stem.rsplit("_", 1)[0]
+      by_class.setdefault(cls, []).append(img)
+
+  for cls in sorted(by_class):  # sort class keys so RNG consumption order is deterministic
+      imgs = sorted(by_class[cls])  # deterministic input order before shuffle
+      rng.shuffle(imgs)
+      for img in imgs[:TEST_PER_CLASS]:
+          shutil.move(str(img), str(test_img_dir / img.name))
+          lbl = val_lbl_dir / (img.stem + ".txt")
+          if lbl.exists():
+              shutil.move(str(lbl), str(test_lbl_dir / lbl.name))
 
   # Cleanup: remove temporary kagglehub cache (source archive no longer needed)
   shutil.rmtree(kh_cache, ignore_errors=True)

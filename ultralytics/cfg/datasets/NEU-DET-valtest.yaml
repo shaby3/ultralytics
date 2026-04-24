@@ -1,0 +1,20 @@
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+
+# NEU-DET variant: `test` split is val + test combined (360 images, 60 per class).
+# Assumes NEU-DET.yaml has already been used to download/convert the dataset.
+# Example: yolo val data=NEU-DET-valtest.yaml split=test
+
+path: NEU-DET
+train: images/train
+val: images/val
+test:
+  - images/val
+  - images/test
+
+names:
+  0: crazing
+  1: inclusion
+  2: patches
+  3: pitted_surface
+  4: rolled-in_scale
+  5: scratches
