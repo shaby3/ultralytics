@@ -1,0 +1,148 @@
+# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+
+# GC10-DET metallic sheet surface defect detection dataset (Pascal VOC XML → YOLO format)
+# Source: https://www.kaggle.com/datasets/alex000kim/gc10det
+# Example usage: yolo train data=GC10-DET.yaml
+# parent
+# ├── ultralytics
+# └── datasets
+#     └── GC10-DET ← downloads + converts here
+#
+# Requires Kaggle credentials: ~/.kaggle/kaggle.json or KAGGLE_USERNAME/KAGGLE_KEY env vars.
+
+path: GC10-DET
+train: images/train  # train images (~80% per folder, seed=42)
+val: images/val      # val images (~10% per folder)
+test: images/test    # test images (~10% per folder)
+
+# Classes (원본 XML의 중국어 병음 → 영문 매핑, 10_yaozhed/10_yaozhe 통합)
+names:
+  0: punching_hole
+  1: welding_line
+  2: crescent_gap
+  3: water_spot
+  4: oil_spot
+  5: silk_spot
+  6: inclusion
+  7: rolled_pit
+  8: crease
+  9: waist_folding
+
+# Download script/URL (optional) ---------------------------------------------------------------------------------------
+download: |
+  import os
+  import random
+  import shutil
+  import xml.etree.ElementTree as ET
+  from pathlib import Path
+
+  import kagglehub
+
+  from ultralytics.utils import TQDM
+
+  SPLIT_SEED = 42
+  VAL_RATIO = 0.1
+  TEST_RATIO = 0.1
+
+  # 원본 XML 클래스명 → YAML names 영문 매핑. 'd' 같은 오타 라벨은 dict에 없어 자동 스킵됨.
+  NAME_MAP = {
+      "1_chongkong": "punching_hole",
+      "2_hanfeng": "welding_line",
+      "3_yueyawan": "crescent_gap",
+      "4_shuiban": "water_spot",
+      "5_youban": "oil_spot",
+      "6_siban": "silk_spot",
+      "7_yiwu": "inclusion",
+      "8_yahen": "rolled_pit",
+      "9_zhehen": "crease",
+      "10_yaozhe": "waist_folding",
+      "10_yaozhed": "waist_folding",  # 원본 철자 혼재 통합
+  }
+
+  def convert_box(size, box):
+      """Pascal VOC → YOLO (정규화 중심좌표+w/h, VOC 1-indexed -1 오프셋 유지)."""
+      dw, dh = 1.0 / size[0], 1.0 / size[1]
+      x, y, w, h = (box[0] + box[1]) / 2.0 - 1, (box[2] + box[3]) / 2.0 - 1, box[1] - box[0], box[3] - box[2]
+      return x * dw, y * dh, w * dw, h * dh
+
+  def convert_label(xml_path, lbl_path, names):
+      """VOC XML → YOLO txt. XML 없거나 <object> 0개면 빈 txt(네거티브 샘플). 매핑 없는 라벨은 스킵."""
+      lines = []
+      if xml_path is not None and xml_path.exists():
+          tree = ET.parse(xml_path)
+          root = tree.getroot()
+          size = root.find("size")
+          w = int(size.find("width").text)
+          h = int(size.find("height").text)
+          for obj in root.iter("object"):
+              raw = (obj.find("name").text or "").strip()
+              mapped = NAME_MAP.get(raw)
+              if mapped is None or mapped not in names:
+                  continue  # 'd' 등 알 수 없는 라벨 스킵
+              xmlbox = obj.find("bndbox")
+              bb = convert_box((w, h), [float(xmlbox.find(k).text) for k in ("xmin", "xmax", "ymin", "ymax")])
+              cls_id = names.index(mapped)
+              lines.append(" ".join(str(a) for a in (cls_id, *bb)))
+      lbl_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+
+  dir = Path(yaml["path"])
+  names = list(yaml["names"].values())
+
+  # 임시 kagglehub 캐시 (종료 시 정리). 이미 실행된 이후 재호출 시에도 재다운→변환 안전.
+  kh_cache = dir.parent / ".kagglehub_gc10det"
+  os.environ["KAGGLEHUB_CACHE"] = str(kh_cache)
+  cache_path = Path(kagglehub.dataset_download("alex000kim/gc10det"))
+
+  # kagglehub이 반환하는 경로는 .../versions/N/ 이고 실제 폴더 1~10 + lable/ 가 바로 아래 있음.
+  src_root = cache_path
+  lbl_src = src_root / "lable"  # 원본 오타 그대로
+
+  for dst_split in ("train", "val", "test"):
+      (dir / "images" / dst_split).mkdir(parents=True, exist_ok=True)
+      (dir / "labels" / dst_split).mkdir(parents=True, exist_ok=True)
+
+  # 폴더 1~10에서 이미지 수집 + 파일명 중복(12건) 제거 (먼저 만난 폴더 1장만 사용)
+  seen = set()
+  by_folder = {}
+  for fld in [str(i) for i in range(1, 11)]:
+      d = src_root / fld
+      if not d.is_dir():
+          continue
+      imgs = []
+      for p in sorted(d.iterdir()):
+          if p.suffix.lower() not in {".jpg", ".jpeg", ".png", ".bmp"}:
+              continue
+          if p.name in seen:
+              continue
+          seen.add(p.name)
+          imgs.append(p)
+      by_folder[fld] = imgs
+
+  # 폴더별 stratified 8:1:1 분할 (seed=42, 결정적)
+  rng = random.Random(SPLIT_SEED)
+  assign = {}
+  for fld in sorted(by_folder, key=int):
+      imgs = sorted(by_folder[fld])
+      rng.shuffle(imgs)
+      n = len(imgs)
+      n_test = max(1, round(n * TEST_RATIO)) if n >= 10 else 0
+      n_val = max(1, round(n * VAL_RATIO)) if n >= 10 else 0
+      for i, p in enumerate(imgs):
+          if i < n_test:
+              assign[p] = "test"
+          elif i < n_test + n_val:
+              assign[p] = "val"
+          else:
+              assign[p] = "train"
+
+  # 이미지 복사 + VOC → YOLO 변환 (XML 없음/빈 XML은 빈 txt 자동 처리)
+  for src_img, split in TQDM(sorted(assign.items()), desc="GC10-DET convert"):
+      dst_img = dir / "images" / split / src_img.name
+      if not dst_img.exists():
+          shutil.copy2(src_img, dst_img)
+      xml_path = lbl_src / (src_img.stem + ".xml")
+      lbl_path = dir / "labels" / split / (src_img.stem + ".txt")
+      convert_label(xml_path if xml_path.exists() else None, lbl_path, names)
+
+  # 임시 캐시 정리
+  shutil.rmtree(kh_cache, ignore_errors=True)
