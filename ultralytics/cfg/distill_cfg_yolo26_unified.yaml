@@ -1,0 +1,46 @@
+# Knowledge Distillation config for YOLO26 — Unified (one2many + one2one)
+# YOLO26: backbone 0-10, neck 11-22, Detect at layer 23 (inputs [16, 19, 22]).
+# Hooks 2nd conv output from both one2many (cv2/cv3) and one2one (one2one_cv2/cv3)
+# branches across 3 scales = 12 distillation points total.
+#
+# Gradient note: one2many KD gradients propagate through backbone/neck/cv2/cv3.
+#                one2one KD gradients update only one2one_cv2/cv3 (x.detach() input).
+
+teacher:
+  model: yolo26s.pt
+  layers:
+    # one2many branch
+    - "model.23.cv2.0.1"         # box scale0 2nd conv
+    - "model.23.cv2.1.1"         # box scale1 2nd conv
+    - "model.23.cv2.2.1"         # box scale2 2nd conv
+    - "model.23.cv3.0.1"         # cls scale0 2nd conv
+    - "model.23.cv3.1.1"         # cls scale1 2nd conv
+    - "model.23.cv3.2.1"         # cls scale2 2nd conv
+    # one2one branch
+    - "model.23.one2one_cv2.0.1" # box scale0 2nd conv
+    - "model.23.one2one_cv2.1.1" # box scale1 2nd conv
+    - "model.23.one2one_cv2.2.1" # box scale2 2nd conv
+    - "model.23.one2one_cv3.0.1" # cls scale0 2nd conv
+    - "model.23.one2one_cv3.1.1" # cls scale1 2nd conv
+    - "model.23.one2one_cv3.2.1" # cls scale2 2nd conv
+
+student:
+  layers:
+    # one2many branch
+    - "model.23.cv2.0.1"
+    - "model.23.cv2.1.1"
+    - "model.23.cv2.2.1"
+    - "model.23.cv3.0.1"
+    - "model.23.cv3.1.1"
+    - "model.23.cv3.2.1"
+    # one2one branch
+    - "model.23.one2one_cv2.0.1"
+    - "model.23.one2one_cv2.1.1"
+    - "model.23.one2one_cv2.2.1"
+    - "model.23.one2one_cv3.0.1"
+    - "model.23.one2one_cv3.1.1"
+    - "model.23.one2one_cv3.2.1"
+
+aligner: ConvBNSiLUAligner
+loss: mse
+weight: 1.0

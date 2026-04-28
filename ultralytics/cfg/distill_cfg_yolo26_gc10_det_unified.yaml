@@ -1,0 +1,42 @@
+# Knowledge Distillation config for GC10-DET — Unified (one2many + one2one)
+# Teacher: GC10-DET에 200 epoch fine-tuned된 yolo26m baseline best.pt.
+# one2many(cv2/cv3) + one2one(one2one_cv2/cv3) 12개 포인트 통합 증류.
+
+teacher:
+  model: runs/detect/gc10_det/train/baseline_yolo26m_gc10_det_200epoch/weights/best.pt
+  layers:
+    # one2many branch
+    - "model.23.cv2.0.1"         # box scale0 2nd conv
+    - "model.23.cv2.1.1"         # box scale1 2nd conv
+    - "model.23.cv2.2.1"         # box scale2 2nd conv
+    - "model.23.cv3.0.1"         # cls scale0 2nd conv
+    - "model.23.cv3.1.1"         # cls scale1 2nd conv
+    - "model.23.cv3.2.1"         # cls scale2 2nd conv
+    # one2one branch
+    - "model.23.one2one_cv2.0.1" # box scale0 2nd conv
+    - "model.23.one2one_cv2.1.1" # box scale1 2nd conv
+    - "model.23.one2one_cv2.2.1" # box scale2 2nd conv
+    - "model.23.one2one_cv3.0.1" # cls scale0 2nd conv
+    - "model.23.one2one_cv3.1.1" # cls scale1 2nd conv
+    - "model.23.one2one_cv3.2.1" # cls scale2 2nd conv
+
+student:
+  layers:
+    # one2many branch
+    - "model.23.cv2.0.1"
+    - "model.23.cv2.1.1"
+    - "model.23.cv2.2.1"
+    - "model.23.cv3.0.1"
+    - "model.23.cv3.1.1"
+    - "model.23.cv3.2.1"
+    # one2one branch
+    - "model.23.one2one_cv2.0.1"
+    - "model.23.one2one_cv2.1.1"
+    - "model.23.one2one_cv2.2.1"
+    - "model.23.one2one_cv3.0.1"
+    - "model.23.one2one_cv3.1.1"
+    - "model.23.one2one_cv3.2.1"
+
+aligner: ConvBNSiLUAligner
+loss: mse
+weight: 1.0

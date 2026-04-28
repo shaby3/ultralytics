@@ -124,13 +124,26 @@ def create_distiller(trainer_cls):
         def _resolve_module(self, model, spec):
             """Resolve a layer spec to an nn.Module.
 
+            distill config YAML의 teacher.layers / student.layers 에서 KD feature 추출 포인트를
+            지정할 때 두 가지 방식을 모두 허용하기 위한 어댑터 메서드.
+
+            지정 방식:
+                - int  : YOLO 모델 특유의 Sequential 레이어 배열(model.model)을 인덱스로 직접 참조.
+                         예) layers: [15, 18, 21]  →  model.model[15] 등을 반환.
+                - str  : PyTorch 표준 점 경로(get_submodule)로 임의 깊이의 서브모듈을 참조.
+                         예) layers: ["model.backbone.layer3"]  →  해당 nn.Module 반환.
+
+            호출 위치:
+                - _register_feature_hooks : 지정 레이어에 forward hook 을 붙여 feature 를 캡처할 때.
+                - _get_layer_channels     : dummy forward 로 각 레이어 출력 채널 수를 측정할 때.
+
             Args:
                 model: The model to resolve from.
                 spec: int (model.model[spec]) or str (model.get_submodule(spec)).
             """
             if isinstance(spec, int):
-                return model.model[spec]
-            return model.get_submodule(spec)
+                return model.model[spec]  # YOLO Sequential 레이어 배열 직접 인덱싱
+            return model.get_submodule(spec)  # PyTorch 표준 점 경로로 서브모듈 탐색
 
         def _register_feature_hooks(self, model, layer_specs, storage):
             """Register forward hooks on specified layers to capture output features.
