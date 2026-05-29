@@ -9,7 +9,7 @@ if __name__ == "__main__":
         split="test",
         imgsz=640,
         batch=32,
-        workers=4,
+        workers=2,
         project="neu_det/test",
         name="baseline_yolo26s_neu_det_200epoch_valtest",
         exist_ok=True,

@@ -10,7 +10,7 @@ if __name__ == "__main__":
         epochs=100,
         batch=32,
         imgsz=640,
-        workers=4,
+        workers=2,
         project="neu_det",
         name="baseline_yolo26n_neu_det_100epoch",
         exist_ok=True,

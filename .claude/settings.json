@@ -1,4 +1,16 @@
 {
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(venv/Scripts/python convert_weights.py runs/detect/gc10_det/train/baseline_yolo26n_gc10_det_200epoch/weights/best.pt runs/detect/gc10_det/train/baseline_yolo26n_gc10_det_200epoch/weights/best_converted.pt yolo26n.yaml)",
+      "Read(//c/Users/SSAFY/AppData/Local/miniconda3/**)",
+      "Read(//c/Users/SSAFY/**)",
+      "Bash(mkdir -p \"c:/Users/SSAFY/ultralytics/scripts/voc/train\")"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\SSAFY\\ultralytics\\scripts\\voc"
+    ]
+  },
   "enabledPlugins": {
     "skill-creator@claude-plugins-official": true
   }

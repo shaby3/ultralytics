@@ -10,7 +10,7 @@ if __name__ == "__main__":
         epochs=50,
         batch=32,
         imgsz=640,
-        workers=4,
+        workers=2,
         # project="runs/detect_voc",
         name="baseline_yolov8n",
         exist_ok=True,
