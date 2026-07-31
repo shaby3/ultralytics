@@ -212,6 +212,11 @@ results.csv
 !runs/detect/**/*.png
 !runs/detect/**/args.yaml
 !runs/detect/**/results.csv
+!runs/detect/**/meta.yaml
+
+# 단, 배치 미리보기는 증강 샘플일 뿐이라 제외한다 (실험당 9장씩 쌓인다)
+runs/detect/**/train_batch*.jpg
+runs/detect/**/val_batch*.jpg
 
 # 추가
 .claude/settings.local.json
