@@ -1,2 +1,0 @@
-model_path,params_M,GFLOPs,size_MB,mAP50,mAP50_95,latency_ms,FPS
-runs/detect/voc/train/baseline_yolo26l_100epoch/weights/best.pt,26.207,93.3,53.0,0.8945,0.7379,18.82,53.1

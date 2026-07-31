@@ -11,16 +11,14 @@ nc(클래스 수)는 checkpoint에서 자동으로 감지하므로 yaml 인자�
     python convert_weights.py best.pt out.pt
         → out.pt (yaml은 best.yaml로 추론 — 이름으로 추론 불가 시 3번째 인자 필요)
 
-    python convert_weights.py best.pt best_converted.pt yolo26n.yaml
+    python convert_weights.py best.pt best_converted.pt yolov8n.yaml
         → yaml 명시. nc 불일치 시 checkpoint의 nc로 자동 재빌드됨.
 
 예시:
     python convert_weights.py \\
-        runs/detect/gc10_det/train/baseline_yolo26n_gc10_det_200epoch/weights/best.pt \\
-        runs/detect/gc10_det/train/baseline_yolo26n_gc10_det_200epoch/weights/best_converted.pt \\
-        yolo26n.yaml
-    
-    python convert_weights.py runs/detect/gc10_det/train/baseline_yolo26n_gc10_det_200epoch/weights/best.pt runs/detect/gc10_det/train/baseline_yolo26n_gc10_det_200epoch/weights/best_converted.pt yolo26n.yaml
+        runs/detect/voc_baseline_yolov8n/weights/best.pt \\
+        runs/detect/voc_baseline_yolov8n/weights/best_converted.pt \\
+        yolov8n.yaml
 """
 import sys
 from pathlib import Path
