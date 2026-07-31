@@ -215,3 +215,10 @@ results.csv
 
 # 추가
 .claude/settings.local.json
+
+# Agent skills — skills-lock.json 만 추적하고 설치본은 무시 (node_modules 와 동일한 취급)
+.agents/
+.claude/skills/
+
+# 코드 인덱스 캐시
+.codegraph/
