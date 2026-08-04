@@ -1,0 +1,32 @@
+# KD config — Detect head 2번째 conv 에서 증류. teacher = yolov8s VOC 학습본.
+#
+# Q2(증류 위치) 비교용 3종 중 하나. distill_head0_/distill_neck_from_8s_voc.yaml 과
+# teacher·aligner·loss·weight 가 모두 같고 layers 만 다르다. 비교를 위해 이 대응을 깨지 말 것.
+#
+# 증류 지점: box(cv2)/cls(cv3) 분기 × 3 스케일 = 6 지점
+# 채널 (student n → teacher s): box 64 → 64, cls 64 → 128
+# cv2/cv3 = Sequential(Conv, Conv, nn.Conv2d) 이므로 .1 은 Conv(Conv2d+BN+SiLU) 출력이다.
+
+teacher:
+  # repo 루트에서 실행하는 것을 전제로 한 상대경로 (README §4)
+  model: runs/detect/voc/baseline/yolov8s/train/weights/best.pt
+  layers:
+    - "model.22.cv2.0.1" # box P3/8
+    - "model.22.cv2.1.1" # box P4/16
+    - "model.22.cv2.2.1" # box P5/32
+    - "model.22.cv3.0.1" # cls P3/8
+    - "model.22.cv3.1.1" # cls P4/16
+    - "model.22.cv3.2.1" # cls P5/32
+
+student:
+  layers:
+    - "model.22.cv2.0.1"
+    - "model.22.cv2.1.1"
+    - "model.22.cv2.2.1"
+    - "model.22.cv3.0.1"
+    - "model.22.cv3.1.1"
+    - "model.22.cv3.2.1"
+
+aligner: ConvBNSiLUAligner # README §4 — teacher feature 가 BN+SiLU 출력이므로 고정
+loss: mse
+weight: 1.0

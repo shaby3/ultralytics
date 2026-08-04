@@ -211,12 +211,16 @@ results.csv
 #   *.png      → results / curve / confusion matrix
 #   *.jpg      → labels.jpg (클래스·박스 분포). 배치 미리보기는 아래에서 다시 제외한다
 #   args.yaml  → 학습 하이퍼파라미터. epochs·batch 는 여기서 확인한다
-#   results.csv → 에폭별 지표
+#   results.csv → train/ 은 에폭별 지표, val/ 은 클래스별 지표 (스키마가 다르다)
+#   metrics.json → val/ 의 스칼라 지표 + speed + 재현용 val_args
+# *.json 을 통째로 열면 save_json=True 일 때 생기는 거대한 predictions.json 이 딸려 들어온다.
+# 파일명을 못 박는다.
 !runs/detect/
 !runs/detect/**/*.png
 !runs/detect/**/*.jpg
 !runs/detect/**/args.yaml
 !runs/detect/**/results.csv
+!runs/detect/**/metrics.json
 
 # 체크포인트는 제외한다 (실험당 12~104MB). 위 weights/ 규칙과 중복이지만 의도를 남겨둔다.
 runs/detect/**/weights/

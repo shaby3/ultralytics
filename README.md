@@ -24,9 +24,51 @@ Detect head / Neck 의 중간 feature 를 증류해 소형 모델(student)의 �
 
 ### 진행 순서
 
-1. **Baseline 확보** — yolov8n / s / m 을 VOC 로 각각 학습 (n 은 student baseline, s·m 은 baseline 지표 겸 VOC-teacher)
-2. **KD 본실험** — teacher 4종(s/m × VOC학습/COCO-pretrained) 조합으로 증류
-3. 결과를 아래 [6. 실험 결과](#6-실험-결과) 표에 누적
+**Baseline 은 확보 완료** — yolov8n / s / m 을 VOC 로 각각 학습했다. 지표는 [6. 실험 결과](#6-실험-결과) 참조.
+n 은 student baseline, s·m 은 baseline 지표 겸 VOC-teacher 로 쓴다.
+
+KD 본실험은 축이 3개다: **증류 위치**(3수준) × **teacher 출처**(VOC학습/COCO-pretrained) × **teacher 크기**(s/m).
+전수조사는 12런이고 GPU 가 1주일 넘게 묶인다. 그래서 **한 phase 에서 한 축만 바꾸고, 이긴 설정을 다음 phase 로 넘긴다.**
+
+| Phase | 런 | 바뀌는 축 | 답하는 질문 |
+|:---:|------|-----------|-------------|
+| **0** | — (1에폭 측정만) | — | batch 확정, 위치별 `kd_loss` 크기 |
+| **1** | neck / head`.0` / head`.1` × **s-VOC** | 증류 위치 (3수준) | 어디서 증류하는 게 좋은가 |
+| **2** | Phase 1 승자 위치 × **s-COCO** | teacher 출처 | VOC 로 학습한 teacher 가 나은가 |
+| **3** | Phase 1 승자 위치 × **m**(Phase 2 승자 출처) | teacher 크기 | teacher 를 키우면 나아지는가 |
+
+**총 5런.** 위치가 3수준으로 가장 넓으니 가장 싼 teacher(s)로 먼저 쓸어야 총비용이 최소가 된다.
+그리고 위치가 나쁘면 gain 이 0 에 가까워서, 위치를 먼저 정하지 않으면 teacher 비교가 전부 노이즈 위에서 이뤄진다.
+
+### 각 phase 가 허용하는 주장의 범위
+
+**Q3(teacher 크기)은 같은 출처의 s 와 비교한다.** Phase 3 의 m 은 Phase 2 승자 출처를 따르므로,
+비교 대상은 Phase 2 가 COCO 로 이겼으면 s-COCO(Phase 2), VOC 로 이겼으면 s-VOC(Phase 1) 다.
+어느 쪽이든 **한 축만 다른 비교**가 되고, 그 런은 이미 손에 있다.
+
+teacher 크기 추이는 3점으로 읽는다: **teacher 없음(baseline n) → s → m.**
+teacher 가 클수록 나빠지는 구간이 보이면 capacity gap 을 짚는 근거가 된다.
+
+teacher 2×2 그리드(출처 × 크기)에서 **3칸이 채워지고 1칸이 빈다.** 그 칸을 채울지는 Phase 2 결과로 정한다.
+
+| Phase 2 승자 | Phase 3 | 빠지는 칸 |
+|:---:|:---:|:---:|
+| VOC | m-VOC | m-COCO |
+| COCO | m-COCO | m-VOC |
+
+- Phase 2 의 COCO vs VOC 차이가 **작으면(~0.5pt 미만) 빈 칸은 건너뛴다** — 교호작용을 논할 주효과가 없다.
+- **크면 1런 추가한다.** 큰 주효과일 때가 교호작용이 결론을 뒤집을 수 있는 상황이다.
+  "VOC 학습 teacher 가 낫다"를 s 에서만 재고 일반화하면, m 에서 방향이 뒤집힐 때 논지가 무너진다.
+
+**Phase 1 의 위치 순위는 s-VOC 에서만 확인한 것이다.** 다른 teacher 에서도 같은 순위인지는 검증하지 않는다
+(greedy 탐색의 한계). 필요하면 2위 위치를 최고 teacher 로 1런 돌려 방어한다.
+
+### 결과 해석 시 주의
+
+**단일 seed 로 0.3pt 차이를 순위로 주장하지 않는다.** Phase 1 의 세 위치가 0.3pt 안에 몰리면
+"구분되지 않음"으로 보고하거나 상위 2개만 seed 를 바꿔 반복한다.
+(`val/` 자체는 결정적이다 — [§7.7](#77-val-의-rect-기본값은-true-다--defaultyaml-을-믿으면-안-된다) 참조.
+학습 seed 노이즈와 val 재현성은 다른 문제다.)
 
 ---
 
@@ -107,15 +149,28 @@ W&B 는 로그인된 상태이며, 끄고 싶을 때는 `WANDB_MODE=disabled` �
 
 ### KD 학습
 
-| 스크립트 | KD 위치 | aligner | distill config |
-|---------|---------|---------|----------------|
-| `scripts/run_phase6_kd.py` | Detect head | ConvAligner | `distill_cfg.yaml` |
-| `scripts/run_phase6_kd_convbn.py` | Detect head | ConvBNAligner | `distill_cfg_convbn.yaml` |
-| `scripts/run_phase6_kd_convbnsilu.py` | Detect head | **ConvBNSiLUAligner** | `distill_cfg_convbnsilu.yaml` |
-| `scripts/run_neck_kd.py` | Neck 출력 | ConvAligner | `distill_neck_cfg.yaml` |
+**Phase 1 — 증류 위치 3수준.** teacher 는 셋 다 s-VOC 고정, aligner·loss·weight 도 동일하고 `layers` 만 다르다.
 
-> 이 스크립트들은 이전 실험 세팅(epochs 50, batch 32)을 담고 있다.
-> 본실험 전에 위 [3. 학습 설정](#3-학습-설정-확정)에 맞춰 갱신해야 한다.
+| distill config | KD 위치 | 지점 | student n → teacher s 채널 |
+|----------------|---------|:---:|----------------------------|
+| `distill_neck_from_8s_voc.yaml` | neck 출력 (layer 15/18/21) | 3 | 64→128, 128→256, 256→512 |
+| `distill_head0_from_8s_voc.yaml` | Detect head **1번째** conv | 6 | box 64→64 ×3, cls 64→128 ×3 |
+| `distill_head1_from_8s_voc.yaml` | Detect head **2번째** conv | 6 | box 64→64 ×3, cls 64→128 ×3 |
+
+head0 과 head1 은 **채널이 완전히 같다** — `cv2`/`cv3` 가 `Sequential(Conv, Conv, nn.Conv2d)` 라
+`.0` 과 `.1` 의 출력 채널이 동일하기 때문이다. aligner 파라미터 수까지 같아서 세 수준 중 가장 깨끗한 비교다.
+
+neck 은 지점이 3개뿐이지만 채널이 커서 **aligner 파라미터는 head 보다 훨씬 많다.**
+neck 이 이기면 "위치 효과"인지 "aligner 용량 효과"인지 해석에 단서를 달아야 한다.
+
+> 세 config 는 서로 대응이 맞아야 비교가 성립한다. `layers` 외의 항목(teacher·aligner·loss·weight)을
+> 한쪽만 바꾸면 Q2 가 위치 × 그 항목의 교락이 된다.
+
+Phase 2·3 은 승자 위치의 config 를 복사해 `teacher.model` 만 바꾼다
+(`_from_8s_coco` / `_from_8m`). 결과 경로 규칙은 [5. 결과 저장 구조](#5-결과-저장-구조) 참조.
+
+> 이전 회차(epochs 50)의 `run_phase6_kd*.py` · `run_neck_kd.py` 와 그 config 들은 삭제했다.
+> 필요하면 git 히스토리에서 복구한다.
 
 ### 증류 지점
 
@@ -156,13 +211,17 @@ runs/detect/
   voc/                        # dataset
     baseline/                 # method
       yolov8n/                # variant ← 실험의 원자 단위
-        train/                #   학습. results.csv 마지막 행 = 최종 val 지표
-        val/                  #   학습 후 best.pt 재평가
+        train/                #   학습. results.csv = 에폭별 지표, args.yaml = 하이퍼파라미터
+        val/                  #   학습 후 best.pt 재평가. results.csv = 클래스별, metrics.json = 스칼라
       yolov8s/
       yolov8m/
-    kd_head/
-      yolov8n_from_8s/
+    kd_head1/                 # method = 증류 위치
+      yolov8n_from_8s/        #   Phase 1 — teacher s-VOC
+      yolov8n_from_8s_coco/   #   Phase 2 — teacher 출처만 교체
+      yolov8n_from_8m/        #   Phase 3 — teacher 크기만 교체
         train/  val/
+    kd_head0/
+    kd_neck/
   neu_det/
     baseline/
       yolov8n/
@@ -182,15 +241,66 @@ YOLO(model.trainer.best).val(project=PROJECT, name="val", ...)
 | 레벨 | 값 | 금지 |
 |------|-----|------|
 | dataset | `voc`, `neu_det`, `gc10_det` | — |
-| method | `baseline`, `kd_head`, `kd_neck`, `prune_l1` | 실험 회차·phase 번호 (`phase6` 는 시간이 지나면 의미를 잃는다) |
+| method | `baseline`, `kd_neck`, `kd_head0`, `kd_head1`, `prune_l1` | 실험 회차·phase 번호 (`phase6` 는 시간이 지나면 의미를 잃는다) |
 | variant | 모델 크기 + 실제로 갈리는 축 하나. `yolov8n`, `yolov8n_from_8s` | dataset·epochs·stage 중복. `50ep` 은 50/100 을 **둘 다** 돌릴 때만 붙인다 |
 
 `baseline_yolov8n_voc_100epoch` 처럼 쓰지 않는다 — dataset 은 경로에, epochs 는 `train/args.yaml` 에 이미 있다.
+
+### KD 는 method 에 위치, variant 에 teacher
+
+증류 위치가 3수준이라 `kd_head` 하나로는 구분이 안 된다. **위치를 method 로 쪼갠다** —
+`kd_neck` / `kd_head0` / `kd_head1`. 그러면 variant 는 teacher 축만 담아 한 축 규칙이 유지된다.
+
+| variant | teacher |
+|---------|---------|
+| `yolov8n_from_8s` | yolov8s **VOC 학습본** |
+| `yolov8n_from_8s_coco` | yolov8s COCO-pretrained |
+| `yolov8n_from_8m` | yolov8m VOC 학습본 |
+| `yolov8n_from_8m_coco` | yolov8m COCO-pretrained |
+
+**VOC 학습본이 기본이고 COCO 만 표시한다.** VOC 가 이 실험의 주 조건이라 접미사 없는 쪽에 둔다.
+`_voc` 를 붙이면 네 variant 중 셋에 붙어 구분에 기여하지 않는다.
+(distill config 파일명은 반대로 `_voc` 를 명시한다 — `ultralytics/cfg/` 에는 VOC 아닌 config 도 놓일 수 있다.)
 
 ### `val/` 은 왜 따로 두는가
 
 `train/` 안에도 매 에폭 검증 결과가 이미 들어 있다. 별도 `val/` 은 학습이 고른 **`best.pt` 로 다시 한 번 평가**한 것이다.
 early stopping 이 걸리면 `last.pt` 와 `best.pt` 가 달라지므로, 보고용 지표는 `val/` 쪽을 쓴다.
+
+### `val/` 지표는 스크립트가 직접 기록한다
+
+ultralytics 는 **`val/` 에 지표를 파일로 남기지 않는다.** curve·confusion matrix PNG 만 저장하고,
+`train/` 에 생기는 `results.csv` 도 `args.yaml` 도 만들지 않는다. 숫자가 콘솔에만 찍히고 사라진다.
+
+그래서 스크립트가 `val()` 반환값에서 뽑아 직접 쓴다. 세 파일 다 git 추적 대상이다.
+
+| 파일 | 출처 | 내용 |
+|------|------|------|
+| `val/results.csv` | `r.to_csv()` | **클래스별** 20행 — Class, Images, Instances, Box-P/R/F1, mAP50, mAP50-95 |
+| `val/metrics.json` | `r.results_dict` + `r.speed` + `VAL_ARGS` | 스칼라 지표 4개 + fitness, 추론 속도, **재현용 평가 조건** |
+
+```python
+r = YOLO(model.trainer.best).val(project=PROJECT, name="val", exist_ok=True, **VAL_ARGS)
+out = Path(r.save_dir)
+out.joinpath("results.csv").write_text(r.to_csv(), encoding="utf-8")
+out.joinpath("metrics.json").write_text(
+    json.dumps({**r.results_dict, "speed": r.speed, "val_args": VAL_ARGS}, indent=2), encoding="utf-8"
+)
+```
+
+`train/results.csv` 는 에폭별, `val/results.csv` 는 클래스별이다. **파일명이 같지만 스키마가 다르다.**
+
+주의할 점 두 가지:
+
+- **`VAL_ARGS` 는 평가 조건을 명시해 박고 `metrics.json` 에 남긴다.** 기본값에 의존하면 업스트림이 바꿀 때
+  과거 결과를 재현할 수 없다. 단 **`rect=True` 다 — `default.yaml` 의 `rect: False` 를 믿으면 안 된다.**
+  [§7.7](#77-val-의-rect-기본값은-true-다--defaultyaml-을-믿으면-안-된다) 에 실측값과 함께 적어뒀다.
+  (`batch` 는 mAP 에 영향이 없다. `imgsz` · `conf` · `rect` 는 영향이 크다.)
+- **`fitness` 는 이 버전에서 mAP50-95 와 같은 값이다.** 가중치가 `[0, 0, 0, 1]` 이다
+  ([metrics.py](ultralytics/utils/metrics.py) `Metric.fitness`). 예전 `0.1*mAP50 + 0.9*mAP50-95` 공식이 아니니 별도 지표로 착각하면 안 된다.
+
+**클래스별 지표는 KD 실험의 핵심 자료다.** 전체 mAP 0.5pt 차이만 보면 증류가 무엇을 전달했는지 알 수 없다.
+VOC 20클래스 중 어느 클래스가 올랐는지 보면 위치별 KD 의 성격을 논할 근거가 생긴다.
 
 ### `test/` 는 조건부
 
@@ -213,8 +323,12 @@ scripts/voc/kd_head/train_yolov8n_from_8s.py  →  runs/detect/voc/kd_head/yolov
 
 ### git 추적 범위
 
-`args.yaml` · `results.csv` · curve/confusion PNG 는 커밋한다.
-`weights/` 와 `train_batch*.jpg` · `val_batch*.jpg` 는 제외한다 — 후자는 증강 샘플일 뿐인데 실험당 9장씩 쌓인다.
+`args.yaml` · `results.csv` · `metrics.json` · curve/confusion PNG 는 커밋한다.
+`weights/` 와 `wandb/`, `train_batch*.jpg` · `val_batch*.jpg` 는 제외한다 — 배치 이미지는 증강 샘플일 뿐인데 실험당 9장씩 쌓인다.
+
+`.gitignore` 는 `runs/*` 로 통째 무시한 뒤 `runs/detect/` 만 다시 열고 위 확장자를 하나씩 허용하는 구조다.
+`*.json` 을 통째로 열지 않고 **`metrics.json` 만 파일명으로 못 박은** 이유는, `save_json=True` 로 val 하면
+생기는 `predictions.json`(COCO 포맷 예측 전체)이 딸려 들어오기 때문이다.
 
 ---
 
@@ -235,8 +349,9 @@ student(n) → teacher 간 mAP50-95 격차: **s 기준 +4.66pt / m 기준 +7.93p
 `train/results.csv` 의 마지막 행(ep100)과 비교하면 mAP50-95 차이가 0.0005 미만이다.
 early stopping 이 안 걸려 best 에폭이 99 / 99 / 100 이었으니 예상된 결과다.
 
-> **`val/` 은 지표를 파일로 남기지 않는다.** `train/` 과 달리 `results.csv` 가 생성되지 않고
-> curve·confusion matrix PNG 만 저장된다. 즉 위 표가 `val/` 지표의 유일한 기록이다 — KD 실험 결과도 같은 방식으로 이 표에 옮긴다.
+원본 기록은 `val/metrics.json`(스칼라 + 평가 조건)과 `val/results.csv`(클래스별)에 있다 — 스크립트가 직접 쓴 것이다
+([§5 `val/` 지표는 스크립트가 직접 기록한다](#val-지표는-스크립트가-직접-기록한다)).
+이 표는 그 값을 옮긴 것이고, KD 실험 결과도 같은 방식으로 누적한다.
 
 | 모델 | 학습 시간 (실측) | §3 추정 | 비고 |
 |------|:---:|:---:|------|
@@ -322,7 +437,39 @@ yolo settings runs_dir=C:/Users/SSAFY/ultralytics/runs
 따로 조절하려면 `DetectionTrainer` 를 상속해 `get_dataloader` 에서 `mode == "val"` 일 때 배치를 바꾸고
 `train(trainer=...)` 로 넘긴다.
 
-### 7.7 Windows 에서는 `if __name__ == "__main__":` 필수
+### 7.7 val 의 `rect` 기본값은 `True` 다 — `default.yaml` 을 믿으면 안 된다
+
+`default.yaml` 에는 `rect: False` 로 적혀 있고 `train/args.yaml` 에도 `rect: false` 로 저장된다.
+**그런데 val 에서 실제로 적용되는 값은 `True` 다.** `Model.val()` 이 method default 로 주입한다:
+
+```python
+# ultralytics/engine/model.py — Model.val()
+custom = {"rect": True}  # method defaults
+args = {**self.overrides, **custom, **kwargs, "mode": "val"}
+```
+
+학습 중 매 에폭 검증도 마찬가지로 `True` 다 — `DetectionTrainer.build_dataset` 이
+`rect=mode == "val"` 로 넘긴다([detect/train.py](ultralytics/models/yolo/detect/train.py)).
+`default.yaml` 의 `rect` 는 **학습용** 값이다.
+
+재현성을 위해 `rect=False` 로 "기본값을 명시"하면 조용히 점수가 깎인다. 실측:
+
+| 모델 | `rect=True` (실제 기본) | `rect=False` | 차이 |
+|------|:---:|:---:|:---:|
+| yolov8n | 0.6284 | 0.6243 | −0.0041 |
+| yolov8s | 0.6750 | 0.6661 | −0.0089 |
+| yolov8m | 0.7077 | 0.6975 | −0.0102 |
+
+모델이 클수록 손해가 커진다. `rect=False` 는 모든 이미지를 640×640 정사각형으로 letterbox 해
+패딩이 늘어나기 때문이다. 또한 이 값으로 재면 `train/results.csv` 의 에폭별 검증값과 비교가 안 된다.
+
+**`VAL_ARGS` 에는 `rect=True` 를 박는다.** 그리고 "기본값과 같으니 명시해도 안전하다"는 가정을 하지 말고,
+새 인자를 박을 때는 실측으로 확인한다.
+
+> val 자체는 **결정적(deterministic)이다.** 같은 조건으로 두 번 돌리면 소수점 5자리까지 같은 값이 나온다.
+> 따라서 `val/` 지표의 차이는 노이즈가 아니라 실제 차이다 — 재현이 안 되면 조건이 다른 것이다.
+
+### 7.8 Windows 에서는 `if __name__ == "__main__":` 필수
 
 `workers > 0` 이면 DataLoader 가 spawn 으로 자식 프로세스를 만든다(Windows 는 fork 없음).
 가드가 없으면 자식이 스크립트 전체를 재실행해 **프로세스가 무한 증식**한다.
