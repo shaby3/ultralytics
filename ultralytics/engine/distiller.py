@@ -533,6 +533,13 @@ def create_distiller(trainer_cls):
                     self._clear_memory(None if self.device.type == "mps" else 0.5)
                     self.metrics, self.fitness = self.validate()
 
+                    # kd_loss 를 self.metrics 에 넣어야 W&B·TensorBoard·Comet 이 받는다.
+                    # 로거 콜백(on_fit_epoch_end)은 trainer.metrics 만 읽고, kd_metrics 는 안 본다.
+                    # results.csv 는 아래 save_metrics 의 kd_metrics 가 컬럼 위치(train 손실 옆)를
+                    # 잡아준다 — 키가 겹쳐도 dict 병합에서 하나로 합쳐지므로 중복 컬럼은 생기지 않는다.
+                    if self.tkd_loss is not None:
+                        self.metrics["train/kd_loss"] = round(self.tkd_loss, 5)
+
                 # NaN recovery
                 if self._handle_nan_recovery(epoch):
                     continue
