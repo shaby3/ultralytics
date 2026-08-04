@@ -220,15 +220,29 @@ scripts/voc/kd_head/train_yolov8n_from_8s.py  →  runs/detect/voc/kd_head/yolov
 
 ## 6. 실험 결과
 
-아직 없음. baseline 학습 완료 후 아래 표에 채운다.
-
 ### Baseline
+
+VOC test2007(4,952장) 기준, `val/` 의 **`best.pt` 재평가값**. 세 모델 모두 early stopping 없이 100에폭 완주했다.
 
 | 모델 | batch | epochs | mAP50 | mAP50-95 | Precision | Recall |
 |------|:---:|:---:|:---:|:---:|:---:|:---:|
-| yolov8n | 32 | 100 | - | - | - | - |
-| yolov8s | 16 | 100 | - | - | - | - |
-| yolov8m | 8 | 100 | - | - | - | - |
+| yolov8n | 32 | 100 | 0.8324 | 0.6284 | 0.8148 | 0.7572 |
+| yolov8s | 16 | 100 | 0.8628 | 0.6750 | 0.8358 | 0.8085 |
+| yolov8m | 8 | 100 | 0.8795 | 0.7077 | 0.8433 | 0.8258 |
+
+student(n) → teacher 간 mAP50-95 격차: **s 기준 +4.66pt / m 기준 +7.93pt.** KD 로 메울 여지가 이만큼이다.
+
+`train/results.csv` 의 마지막 행(ep100)과 비교하면 mAP50-95 차이가 0.0005 미만이다.
+early stopping 이 안 걸려 best 에폭이 99 / 99 / 100 이었으니 예상된 결과다.
+
+> **`val/` 은 지표를 파일로 남기지 않는다.** `train/` 과 달리 `results.csv` 가 생성되지 않고
+> curve·confusion matrix PNG 만 저장된다. 즉 위 표가 `val/` 지표의 유일한 기록이다 — KD 실험 결과도 같은 방식으로 이 표에 옮긴다.
+
+| 모델 | 학습 시간 (실측) | §3 추정 | 비고 |
+|------|:---:|:---:|------|
+| yolov8n | 7.9h | 14.8h | 추정이 크게 보수적이었다 |
+| yolov8s | 18.8h | 17.9h | 거의 일치 |
+| yolov8m | 33.8h | 37.8h | 추정보다 10% 빠름 |
 
 ### KD
 

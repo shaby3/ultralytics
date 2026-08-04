@@ -150,8 +150,6 @@ dmypy.json
 # datasets and projects (ignore /datasets dir at root only to allow for docs/en/datasets dir)
 /datasets
 runs/*
-!runs/detect/
-runs/detect/**/weights/
 wandb/
 .DS_Store
 
@@ -206,15 +204,24 @@ calibration_*.npy
 args.yaml
 results.csv
 
-# Allow experiment results in runs/detect/ (weights excluded above)
-!runs/detect/*/
-!runs/detect/**/*.jpg
+# 실험 결과 — 지표와 플롯만 추적한다 (README §5 "git 추적 범위")
+# runs/ 는 위에서 통째로 무시했다. 여기서 detect/ 만 다시 열고, 추적할 파일을 하나씩 허용한다.
+# 이 블록이 *.png / *.jpg / weights/ / args.yaml / results.csv 규칙보다 뒤에 와야 negation 이 먹는다.
+# (.gitignore 는 줄 끝 주석을 패턴의 일부로 읽는다 — 주석은 반드시 따로 줄을 쓴다)
+#   *.png      → results / curve / confusion matrix
+#   *.jpg      → labels.jpg (클래스·박스 분포). 배치 미리보기는 아래에서 다시 제외한다
+#   args.yaml  → 학습 하이퍼파라미터. epochs·batch 는 여기서 확인한다
+#   results.csv → 에폭별 지표
+!runs/detect/
 !runs/detect/**/*.png
+!runs/detect/**/*.jpg
 !runs/detect/**/args.yaml
 !runs/detect/**/results.csv
-!runs/detect/**/meta.yaml
 
-# 단, 배치 미리보기는 증강 샘플일 뿐이라 제외한다 (실험당 9장씩 쌓인다)
+# 체크포인트는 제외한다 (실험당 12~104MB). 위 weights/ 규칙과 중복이지만 의도를 남겨둔다.
+runs/detect/**/weights/
+
+# 배치 미리보기도 제외한다 — 증강 샘플일 뿐인데 실험당 9장씩 쌓인다
 runs/detect/**/train_batch*.jpg
 runs/detect/**/val_batch*.jpg
 
