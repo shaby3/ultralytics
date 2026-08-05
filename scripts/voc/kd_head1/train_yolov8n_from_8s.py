@@ -6,8 +6,8 @@ layers 와 weight 만 다르다 — ultralytics/cfg/distill_head1_from_8s_voc.ya
 head1 이 weight 정규화의 기준(1.0)이다 — 이전 회차 실험(head .1, weight 1.0)과 이어진다 (README §4).
 head0 과 head1 은 출력 채널이 같아 aligner 까지 동일하다 — 세 수준 중 가장 깨끗한 비교.
 
-1에폭 실측 11.0분 → 100에폭 약 18.4시간 (RTX 4050 6GB, batch 32).
-에폭 말 검증(batch 64) 구간에서 peak 가 물리 VRAM 을 넘지만 시스템 RAM 스필로 완주한다 (README §4).
+EMA 유령 hook 리크 수정 후 1에폭 실측 7.8분(batch 16, peak 2.9G/6.1G) — README §7.8.
+100에폭 약 13시간.
 
 결과: runs/detect/voc/kd_head1/yolov8n_from_8s/{train,val}/
 """
@@ -18,20 +18,6 @@ from pathlib import Path
 from ultralytics import YOLO
 from ultralytics.engine.distiller import create_distiller
 from ultralytics.models.yolo.detect.train import DetectionTrainer
-
-# 에폭 말 검증 배치. trainer 기본은 batch*2(=32)인데 그 구간 peak 로 시스템이 버벅여 더 낮췄다.
-# 검증 batch 는 mAP 에 거의 영향이 없다 — 실측 0.0001 미만 (README §7.6·§7.7).
-VAL_BATCH = 8
-
-
-class ValBatchCappedTrainer(DetectionTrainer):
-    """에폭 말 검증 배치를 VAL_BATCH 로 고정한다 — trainer 는 batch*2 로 하드코딩한다 (README §7.6)."""
-
-    def get_dataloader(self, dataset_path, batch_size=16, rank=0, mode="train"):
-        if mode == "val":
-            batch_size = VAL_BATCH
-        return super().get_dataloader(dataset_path, batch_size, rank, mode)
-
 
 # runs/detect 를 붙이면 안 된다 — ultralytics 가 RUNS_DIR/<task>/ 아래로 합친다 (README §7.5)
 PROJECT = "voc/kd_head1/yolov8n_from_8s"
@@ -51,7 +37,7 @@ VAL_ARGS = dict(
 )
 
 if __name__ == "__main__":
-    Distiller = create_distiller(ValBatchCappedTrainer)
+    Distiller = create_distiller(DetectionTrainer)
     trainer = Distiller(
         overrides={
             "model": "yolov8n.pt",  # baseline n 과 같은 COCO pretrained 출발점
@@ -60,8 +46,8 @@ if __name__ == "__main__":
             "name": "train",
             "epochs": 100,
             "patience": 30,
-            "batch": 16,  # 32 는 에폭 말 검증(batch*2) 스파이크로 시스템이 버벅여서 낮췄다.
-            # accumulate 가 명목 64 를 유지해(README §4) 유효 batch 는 baseline 과 같고 BN 통계만 다르다.
+            "batch": 16,  # 32 도 돌지만 학습 구간 5.8G/6.1G 로 빠듯해 여유를 둔다 (README §4).
+            # accumulate 가 명목 64 를 유지해 유효 batch 는 baseline(32) 과 같고 BN 통계만 다르다.
             "imgsz": 640,
             "workers": 2,
             "exist_ok": True,

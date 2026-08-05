@@ -180,12 +180,13 @@ teacher 를 s→m 으로 바꿔도 neck kd_loss 는 0.318→0.330 으로 거의 
 
 ### KD 학습 비용 (Phase 0, 1에폭 실측)
 
-**batch 는 5런 전부 16 으로 고정한다.** 처음엔 baseline n 과 같은 32 로 계획했으나,
-batch 32 에서는 에폭 말 검증(trainer 가 `batch*2`=64 로 고정, §7.6) 구간의 peak 가
-물리 VRAM 을 3~4GB 넘어 시스템 RAM 으로 스필됐고 그동안 컴퓨터 전체가 버벅였다.
-batch 16(검증 32)에서도 렉이 남아, **KD 스크립트는 에폭 말 검증 배치를 8 로 캡한다** —
-`DetectionTrainer` 상속으로 `mode=="val"` 일 때만 배치를 바꾼 `ValBatchCappedTrainer` (§7.6 의 방법).
-검증 batch 는 mAP 에 거의 영향이 없다 (실측 0.0001 미만, §7.7).
+> 처음 Phase 0 프로브에서 검증 구간 peak 가 7.5~10.2GB 로 물리 VRAM(6.1GB)을 넘어
+> 시스템 RAM 스필 + 시스템 전체 렉이 발생했다. 원인은 activation 이 아니라
+> **distiller 의 EMA 유령 hook 메모리 리크**였다 — §7.8 참조. 수정 후 같은 조합(head1)의
+> peak 가 10.2G → **2.9G** 로, 에폭 시간이 12.4분 → **7.8분**으로 내려왔다.
+
+**batch 는 5런 전부 16 으로 고정한다.** 32 도 돌지만 학습 구간이 5.8G/6.1G 로 빠듯해서
+여유를 둔 선택이다 (batch 16 학습 구간은 ~2.6G).
 
 **baseline(batch 32)과의 비교는 유지된다** — ultralytics 는 gradient accumulation 으로
 명목 batch(`nbs=64`)를 맞춘다. 32 는 2번, 16 은 4번 누적이라 optimizer 가 보는 유효 batch 는
@@ -193,21 +194,14 @@ batch 16(검증 32)에서도 렉이 남아, **KD 스크립트는 에폭 말 검�
 KD 5런끼리는 전부 batch 16 이라 내부 비교(Q1·Q2·Q3)에는 아예 영향이 없고,
 baseline 대비 절대 gain 에만 이 경미한 차이가 얹힌다.
 
-아래는 batch 32 실측이다. batch 16 은 스필이 없어져 비슷하거나 약간 빠를 것으로 본다.
+리크 수정 후 실측(batch 16, 검증 batch*2=32): **head1 7.8분/에폭 → 100에폭 약 13h.**
+head0 은 head1 과 동급, neck 은 KD 지점이 적어 이보다 빠르다(11~13h 추정).
+baseline n(4.74분/에폭) 대비 약 1.6배. **Phase 1 = 약 1.6일, 5런 총 2.5~3일** 수준으로 잡는다.
 
-| 조합 | 에폭당 (검증 포함) | 100에폭 추정 |
-|------|:---:|:---:|
-| neck × s | 8.8분 | 14.6h |
-| head0 × s | 11.0분 | 18.3h |
-| head1 × s | 11.0분 | 18.4h |
-| neck × m | 9.7분 | 16.1h |
-
-baseline n(4.74분/에폭) 대비 1.85~2.33배. head 가 지점 6개라 neck 보다 25% 느리다.
-**Phase 1 = 약 2.1일, 5런 총 3.5일** 수준으로 잡는다.
-
-kd_loss 는 배치 평균 MSE 라 batch 크기와 무관하다 — 위 weight 정규화(batch 32 실측)는 그대로 유효하다.
+kd_loss 는 배치 평균 MSE 라 batch 크기와 무관하다 — 위 weight 정규화(batch 32 실측)는 그대로
+유효하고, 리크 수정 후 head1 재실측(5.79)도 이전 값(5.99)과 일치한다.
 보고용 `val/` 재평가(`VAL_ARGS`)는 batch 32 를 유지한다 — baseline n 의 `val/` 과 같은 조건이고,
-이 단계는 teacher 가 없어 스필도 렉도 없다.
+이 단계는 teacher 가 없어 가볍다.
 
 head0 과 head1 은 **채널이 완전히 같다** — `cv2`/`cv3` 가 `Sequential(Conv, Conv, nn.Conv2d)` 라
 `.0` 과 `.1` 의 출력 채널이 동일하기 때문이다. aligner 파라미터 수까지 같아서 세 수준 중 가장 깨끗한 비교다.
@@ -501,8 +495,10 @@ yolo settings runs_dir=C:/Users/SSAFY/ultralytics/runs
 따로 조절하려면 `DetectionTrainer` 를 상속해 `get_dataloader` 에서 `mode == "val"` 일 때 배치를 바꾸고
 `train(trainer=...)` 로 넘긴다.
 
-KD 스크립트들이 실제로 이 방법을 쓴다 — teacher 가 상주한 채 검증이 돌면 peak 가 물리 VRAM 을
-넘어 시스템 전체가 버벅여서, `ValBatchCappedTrainer` 로 검증 배치를 8 로 캡했다 (§4).
+한때 KD 스크립트가 이 방법으로 검증 배치를 8 로 캡했었다 — 검증 구간 VRAM 폭증 때문이었는데,
+진범은 배치가 아니라 distiller 의 유령 hook 리크(§7.8)로 밝혀져 수정 후 캡을 제거했다.
+오히려 캡은 역효과였다: 리크는 배치 크기가 아니라 **검증 배치 횟수**에 비례해서, 배치를 8 로
+낮추자 forward 횟수가 4배로 늘어 누수도 4배가 됐다.
 
 ### 7.7 val 의 `rect` 기본값은 `True` 다 — `default.yaml` 을 믿으면 안 된다
 
@@ -554,7 +550,32 @@ batch 가 바뀌면 한 배치에 묶이는 이미지 조합이 바뀌고, 그 �
 > 학습 중 검증은 trainer 가 `batch*2` 로 돌리고(§7.6), `val/` 은 `VAL_ARGS` 의 batch 로 돌린다.
 > best.pt 와 last.pt 차이에 이 rect 배치 차이가 더해진 것이다.
 
-### 7.8 Windows 에서는 `if __name__ == "__main__":` 필수
+### 7.8 forward hook 이 걸린 모델을 deepcopy 하면 hook 도 복사된다 — EMA 메모리 리크
+
+KD 첫 실행에서 에폭 말 검증 도중 메모리가 수십 GB 로 폭증해 시스템이 멎었다. 원인:
+
+1. distiller 가 student 에 feature 캡처용 forward hook 을 걸고, **그 뒤에** `ModelEMA` 가 생성됐다.
+2. `ModelEMA` 는 `deepcopy(model)` 로 만든다 — **`_forward_hooks` 까지 통째로 복사된다.**
+3. 복사된 hook 의 storage 리스트도 deepcopy 로 분리된 별개 리스트가 된다. 학습 루프가 매 스텝
+   비우는 건 원본 리스트라, **EMA 쪽 리스트는 아무도 비우지 않는다.**
+4. 에폭 말 검증은 EMA 모델로 돈다 → 검증 배치마다 hook 이 발동해 feature 텐서가 무한 적재.
+
+증상이 "검증 구간 VRAM 폭증"이라 검증 배치 크기를 의심하기 쉬운데, **리크는 배치 크기가 아니라
+배치 횟수에 비례**한다. 배치를 낮추면 오히려 악화된다 (32→8 이면 forward 횟수 4배).
+
+수정: hook 등록을 `_setup_train` 의 맨 끝(모든 EMA 생성·resume 이후)으로 옮겼다.
+deepcopy 시점에 hook 이 존재하지 않으면 이 부류의 버그가 원천적으로 안 생긴다.
+`save_model()` 의 hook 클리어는 안전망으로 남겨뒀다. 수정 전후 실측 (head1, batch 16):
+
+| | peak reserved | 에폭 시간 |
+|---|:---:|:---:|
+| 수정 전 | 10.2G (스필) | 12.4분 |
+| **수정 후** | **2.9G** | **7.8분** |
+
+교훈: **hook 이 걸린 모델을 deepcopy 하는 경로(EMA, checkpoint 용 복사 등)가 있는지 항상 확인할 것.**
+hook 은 모델 밖의 상태(storage)를 참조하는데, deepcopy 는 그 연결을 조용히 끊고 사본을 만든다.
+
+### 7.9 Windows 에서는 `if __name__ == "__main__":` 필수
 
 `workers > 0` 이면 DataLoader 가 spawn 으로 자식 프로세스를 만든다(Windows 는 fork 없음).
 가드가 없으면 자식이 스크립트 전체를 재실행해 **프로세스가 무한 증식**한다.

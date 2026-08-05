@@ -278,20 +278,13 @@ def create_distiller(trainer_cls):
             # 6. Create aligner
             self._setup_aligner(student_channels, teacher_channels)
 
-            # 7. Register feature hooks
-            self._teacher_feats = []
-            self._student_feats = []
-            self._hooks = []
-            self._hooks += self._register_feature_hooks(self.teacher, teacher_layers, self._teacher_feats)
-            self._hooks += self._register_feature_hooks(self.model, student_layers, self._student_feats)
-
-            # 8. Wrap student + aligner
+            # 7. Wrap student + aligner
             self.model = DistillationWrapper(self.model, self.aligner_module)
 
-            # 9. KD loss
+            # 8. KD loss
             self._setup_kd_loss()
 
-            # 10. Remaining base setup: compile, freeze, AMP, DDP, batch, optimizer, EMA, etc.
+            # 9. Remaining base setup: compile, freeze, AMP, DDP, batch, optimizer, EMA, etc.
             self.model = attempt_compile(self.model, device=self.device, mode=self.args.compile)
 
             freeze_list = (
@@ -353,6 +346,20 @@ def create_distiller(trainer_cls):
             self.stopper, self.stop = EarlyStopping(patience=self.args.patience), False
             self.resume_training(ckpt)
             self.scheduler.last_epoch = self.start_epoch - 1
+
+            # 10. Register feature hooks — 반드시 모든 base setup(EMA·resume)이 끝난 뒤에 건다.
+            # ModelEMA 는 self.model 을 deepcopy 하는데, hook 이 걸린 채 복사되면 복사본의 hook 이
+            # deepcopy 로 분리된 자기만의 storage 리스트에 텐서를 쌓는다. 그 리스트는 학습 루프의
+            # .clear() 가 닿지 않아, EMA 로 도는 에폭 말 검증에서 배치 수만큼 메모리가 누수된다.
+            # (save_model 의 hook 클리어는 첫 저장 전까지 방어하지 못한다 — 1에폭 검증에서 실제로 터졌다.)
+            self._teacher_feats = []
+            self._student_feats = []
+            self._hooks = []
+            self._hooks += self._register_feature_hooks(self.teacher, teacher_layers, self._teacher_feats)
+            self._hooks += self._register_feature_hooks(
+                unwrap_model(self.model).student, student_layers, self._student_feats
+            )
+
             self.run_callbacks("on_pretrain_routine_end")
 
         # --- Training loop override ---
