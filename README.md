@@ -183,7 +183,9 @@ teacher 를 s→m 으로 바꿔도 neck kd_loss 는 0.318→0.330 으로 거의 
 **batch 는 5런 전부 16 으로 고정한다.** 처음엔 baseline n 과 같은 32 로 계획했으나,
 batch 32 에서는 에폭 말 검증(trainer 가 `batch*2`=64 로 고정, §7.6) 구간의 peak 가
 물리 VRAM 을 3~4GB 넘어 시스템 RAM 으로 스필됐고 그동안 컴퓨터 전체가 버벅였다.
-16 이면 검증이 batch 32 로 내려가 스필이 사라진다.
+batch 16(검증 32)에서도 렉이 남아, **KD 스크립트는 에폭 말 검증 배치를 8 로 캡한다** —
+`DetectionTrainer` 상속으로 `mode=="val"` 일 때만 배치를 바꾼 `ValBatchCappedTrainer` (§7.6 의 방법).
+검증 batch 는 mAP 에 거의 영향이 없다 (실측 0.0001 미만, §7.7).
 
 **baseline(batch 32)과의 비교는 유지된다** — ultralytics 는 gradient accumulation 으로
 명목 batch(`nbs=64`)를 맞춘다. 32 는 2번, 16 은 4번 누적이라 optimizer 가 보는 유효 batch 는
@@ -498,6 +500,9 @@ yolo settings runs_dir=C:/Users/SSAFY/ultralytics/runs
 검증은 추론이라 메모리를 덜 쓰지만, 배치를 키울 때는 이 2배를 감안한다.
 따로 조절하려면 `DetectionTrainer` 를 상속해 `get_dataloader` 에서 `mode == "val"` 일 때 배치를 바꾸고
 `train(trainer=...)` 로 넘긴다.
+
+KD 스크립트들이 실제로 이 방법을 쓴다 — teacher 가 상주한 채 검증이 돌면 peak 가 물리 VRAM 을
+넘어 시스템 전체가 버벅여서, `ValBatchCappedTrainer` 로 검증 배치를 8 로 캡했다 (§4).
 
 ### 7.7 val 의 `rect` 기본값은 `True` 다 — `default.yaml` 을 믿으면 안 된다
 

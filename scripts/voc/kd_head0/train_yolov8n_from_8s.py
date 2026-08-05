@@ -19,6 +19,20 @@ from ultralytics import YOLO
 from ultralytics.engine.distiller import create_distiller
 from ultralytics.models.yolo.detect.train import DetectionTrainer
 
+# 에폭 말 검증 배치. trainer 기본은 batch*2(=32)인데 그 구간 peak 로 시스템이 버벅여 더 낮췄다.
+# 검증 batch 는 mAP 에 거의 영향이 없다 — 실측 0.0001 미만 (README §7.6·§7.7).
+VAL_BATCH = 8
+
+
+class ValBatchCappedTrainer(DetectionTrainer):
+    """에폭 말 검증 배치를 VAL_BATCH 로 고정한다 — trainer 는 batch*2 로 하드코딩한다 (README §7.6)."""
+
+    def get_dataloader(self, dataset_path, batch_size=16, rank=0, mode="train"):
+        if mode == "val":
+            batch_size = VAL_BATCH
+        return super().get_dataloader(dataset_path, batch_size, rank, mode)
+
+
 # runs/detect 를 붙이면 안 된다 — ultralytics 가 RUNS_DIR/<task>/ 아래로 합친다 (README §7.5)
 PROJECT = "voc/kd_head0/yolov8n_from_8s"
 
@@ -37,7 +51,7 @@ VAL_ARGS = dict(
 )
 
 if __name__ == "__main__":
-    Distiller = create_distiller(DetectionTrainer)
+    Distiller = create_distiller(ValBatchCappedTrainer)
     trainer = Distiller(
         overrides={
             "model": "yolov8n.pt",  # baseline n 과 같은 COCO pretrained 출발점
