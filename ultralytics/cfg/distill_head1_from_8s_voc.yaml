@@ -1,7 +1,8 @@
 # KD config — Detect head 2번째 conv 에서 증류. teacher = yolov8s VOC 학습본.
 #
 # Q2(증류 위치) 비교용 3종 중 하나. distill_head0_/distill_neck_from_8s_voc.yaml 과
-# teacher·aligner·loss·weight 가 모두 같고 layers 만 다르다. 비교를 위해 이 대응을 깨지 말 것.
+# teacher·aligner·loss 가 같고 layers 와 weight 만 다르다. 비교를 위해 이 대응을 깨지 말 것.
+# weight 는 위치별 kd_loss 실측(1에폭)으로 정규화한 값이다 — README §4 참조.
 #
 # 증류 지점: box(cv2)/cls(cv3) 분기 × 3 스케일 = 6 지점
 # 채널 (student n → teacher s): box 64 → 64, cls 64 → 128
@@ -29,4 +30,6 @@ student:
 
 aligner: ConvBNSiLUAligner # README §4 — teacher feature 가 BN+SiLU 출력이므로 고정
 loss: mse
+# 1에폭 kd_loss 실측: neck 0.318 / head0 0.667 / head1 5.992 (teacher s-VOC, batch 32).
+# head1 이 정규화 기준(1.0)이다 — 이전 회차 실험(head .1, weight 1.0)과 이어진다.
 weight: 1.0

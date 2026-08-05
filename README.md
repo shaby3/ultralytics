@@ -149,13 +149,51 @@ W&B 는 로그인된 상태이며, 끄고 싶을 때는 `WANDB_MODE=disabled` �
 
 ### KD 학습
 
-**Phase 1 — 증류 위치 3수준.** teacher 는 셋 다 s-VOC 고정, aligner·loss·weight 도 동일하고 `layers` 만 다르다.
+**Phase 1 — 증류 위치 3수준.** teacher 는 셋 다 s-VOC 고정, aligner·loss 도 동일하고 `layers` 와 `weight` 만 다르다.
 
-| distill config | KD 위치 | 지점 | student n → teacher s 채널 |
-|----------------|---------|:---:|----------------------------|
-| `distill_neck_from_8s_voc.yaml` | neck 출력 (layer 15/18/21) | 3 | 64→128, 128→256, 256→512 |
-| `distill_head0_from_8s_voc.yaml` | Detect head **1번째** conv | 6 | box 64→64 ×3, cls 64→128 ×3 |
-| `distill_head1_from_8s_voc.yaml` | Detect head **2번째** conv | 6 | box 64→64 ×3, cls 64→128 ×3 |
+| distill config | KD 위치 | 지점 | student n → teacher s 채널 | weight |
+|----------------|---------|:---:|----------------------------|:---:|
+| `distill_neck_from_8s_voc.yaml` | neck 출력 (layer 15/18/21) | 3 | 64→128, 128→256, 256→512 | **20** |
+| `distill_head0_from_8s_voc.yaml` | Detect head **1번째** conv | 6 | box 64→64 ×3, cls 64→128 ×3 | **10** |
+| `distill_head1_from_8s_voc.yaml` | Detect head **2번째** conv | 6 | box 64→64 ×3, cls 64→128 ×3 | **1** (기준) |
+
+### weight 는 위치별 kd_loss 실측으로 정규화했다
+
+`weight=1.0` 을 셋에 공통으로 주면 위치 비교가 성립하지 않는다. kd_loss 는 MSE 라 그 지점 feature 의
+분산에 비례하는데, 위치마다 스케일이 다르기 때문이다. 1에폭 실측 (teacher s-VOC, batch 32):
+
+| 위치 | kd_loss (1에폭 평균) | task loss 대비 초기 KD 비중 | head1 대비 |
+|------|:---:|:---:|:---:|
+| neck | 0.318 | 6.4% | 1/18.8 |
+| head`.0` | 0.667 | 12.6% | 1/9.0 |
+| head`.1` | 5.992 | 56.3% | 1 |
+
+**19배 차이다.** 이대로 돌리면 head1 은 KD 가 학습 신호의 절반이고 neck 은 6% — 위치 비교가 아니라
+KD 강도 비교가 된다. 그래서 **head1 을 1.0 기준으로 두고**(이전 회차 실험과 이어진다) 나머지를
+역수로 올려 초기 KD 기여를 맞췄다: neck 18.8→**20**, head0 9.0→**10** (반올림).
+
+teacher 를 s→m 으로 바꿔도 neck kd_loss 는 0.318→0.330 으로 거의 안 변한다.
+**크기를 지배하는 건 teacher 가 아니라 위치다** — Phase 2·3 에서 weight 를 재보정하지 않는 근거.
+
+한계: 이 정규화는 1에폭 시점의 기여율만 맞춘다. 학습이 진행되면 비율은 다시 갈린다.
+위치별 최적 weight 스윕이 엄밀하지만 런이 3배가 되어, 자릿수 교락만 막는 선에서 멈춘 것이다.
+
+### KD 학습 비용 (Phase 0, 1에폭 실측)
+
+**batch 는 5런 전부 32 로 고정한다** — baseline n 과 같은 값이라 비교가 유지된다.
+teacher 는 no_grad 추론이라 학습 구간 VRAM 은 ~5.1G/6.1G 로 여유가 있다.
+단 peak reserved 는 7.5~10.2G 까지 뛰는데(에폭 말 검증 batch 64 구간으로 추정, §7.6),
+Windows 드라이버가 시스템 RAM 으로 흘려 OOM 없이 완주한다. 그 비용은 아래 시간에 포함돼 있다.
+
+| 조합 | 에폭당 (검증 포함) | 100에폭 추정 |
+|------|:---:|:---:|
+| neck × s | 8.8분 | 14.6h |
+| head0 × s | 11.0분 | 18.3h |
+| head1 × s | 11.0분 | 18.4h |
+| neck × m | 9.7분 | 16.1h |
+
+baseline n(4.74분/에폭) 대비 1.85~2.33배. head 가 지점 6개라 neck 보다 25% 느리다.
+**Phase 1 = 약 2.1일, 5런 총 3.5일** 수준으로 잡는다.
 
 head0 과 head1 은 **채널이 완전히 같다** — `cv2`/`cv3` 가 `Sequential(Conv, Conv, nn.Conv2d)` 라
 `.0` 과 `.1` 의 출력 채널이 동일하기 때문이다. aligner 파라미터 수까지 같아서 세 수준 중 가장 깨끗한 비교다.
@@ -163,10 +201,19 @@ head0 과 head1 은 **채널이 완전히 같다** — `cv2`/`cv3` 가 `Sequenti
 neck 은 지점이 3개뿐이지만 채널이 커서 **aligner 파라미터는 head 보다 훨씬 많다.**
 neck 이 이기면 "위치 효과"인지 "aligner 용량 효과"인지 해석에 단서를 달아야 한다.
 
-> 세 config 는 서로 대응이 맞아야 비교가 성립한다. `layers` 외의 항목(teacher·aligner·loss·weight)을
-> 한쪽만 바꾸면 Q2 가 위치 × 그 항목의 교락이 된다.
+> 세 config 는 서로 대응이 맞아야 비교가 성립한다. teacher·aligner·loss 를 한쪽만 바꾸면
+> Q2 가 위치 × 그 항목의 교락이 된다. weight 는 예외로 **일부러 다르다** — 위 정규화 참조.
 
-Phase 2·3 은 승자 위치의 config 를 복사해 `teacher.model` 만 바꾼다
+Phase 1 실행 — baseline 과 마찬가지로 순차 실행한다 (동시 실행은 VRAM 부족):
+
+```bash
+.venv/Scripts/python.exe scripts/voc/kd_neck/train_yolov8n_from_8s.py; .venv/Scripts/python.exe scripts/voc/kd_head0/train_yolov8n_from_8s.py; .venv/Scripts/python.exe scripts/voc/kd_head1/train_yolov8n_from_8s.py
+```
+
+각 스크립트는 baseline 스크립트와 같은 골격이다 — 학습 후 `best.pt` 재평가(`val/`)와
+지표 기록(`results.csv` · `metrics.json`)까지 수행한다.
+
+Phase 2·3 은 승자 위치의 config 와 스크립트를 복사해 `teacher.model` 만 바꾼다
 (`_from_8s_coco` / `_from_8m`). 결과 경로 규칙은 [5. 결과 저장 구조](#5-결과-저장-구조) 참조.
 
 > 이전 회차(epochs 50)의 `run_phase6_kd*.py` · `run_neck_kd.py` 와 그 config 들은 삭제했다.
@@ -295,7 +342,10 @@ out.joinpath("metrics.json").write_text(
 - **`VAL_ARGS` 는 평가 조건을 명시해 박고 `metrics.json` 에 남긴다.** 기본값에 의존하면 업스트림이 바꿀 때
   과거 결과를 재현할 수 없다. 단 **`rect=True` 다 — `default.yaml` 의 `rect: False` 를 믿으면 안 된다.**
   [§7.7](#77-val-의-rect-기본값은-true-다--defaultyaml-을-믿으면-안-된다) 에 실측값과 함께 적어뒀다.
-  (`batch` 는 mAP 에 영향이 없다. `imgsz` · `conf` · `rect` 는 영향이 크다.)
+- **`rect=True` 에서는 `batch` 도 mAP 에 영향을 준다.** rect 는 이미지를 종횡비로 정렬한 뒤
+  **배치 단위로** letterbox 모양을 정하므로(`set_rectangle` 의 `bi = floor(arange(ni) / batch_size)`),
+  batch 가 바뀌면 묶이는 조합과 패딩이 바뀐다. 영향은 작지만 0 이 아니다 —
+  **KD 5런은 val batch 를 32 로 통일한다**(baseline n 과 같은 값이라 비교가 유지된다).
 - **`fitness` 는 이 버전에서 mAP50-95 와 같은 값이다.** 가중치가 `[0, 0, 0, 1]` 이다
   ([metrics.py](ultralytics/utils/metrics.py) `Metric.fitness`). 예전 `0.1*mAP50 + 0.9*mAP50-95` 공식이 아니니 별도 지표로 착각하면 안 된다.
 
@@ -468,6 +518,24 @@ args = {**self.overrides, **custom, **kwargs, "mode": "val"}
 
 > val 자체는 **결정적(deterministic)이다.** 같은 조건으로 두 번 돌리면 소수점 5자리까지 같은 값이 나온다.
 > 따라서 `val/` 지표의 차이는 노이즈가 아니라 실제 차이다 — 재현이 안 되면 조건이 다른 것이다.
+
+**그리고 `rect=True` 이면 `batch` 도 mAP 에 영향을 준다.** rect 는 이미지를 종횡비로 정렬한 뒤
+**배치 단위로** letterbox 모양을 정한다:
+
+```python
+# ultralytics/data/base.py — set_rectangle()
+bi = np.floor(np.arange(self.ni) / self.batch_size).astype(int)  # batch index
+```
+
+batch 가 바뀌면 한 배치에 묶이는 이미지 조합이 바뀌고, 그 배치의 종횡비 극단값으로 패딩이 정해지니
+결과가 미세하게 달라진다. `rect=False` 라면 전부 640×640 이라 batch 는 mAP 에 영향이 없다.
+
+따라서 **`batch` 는 VRAM 설정값이 아니라 평가 조건의 일부다.** `metrics.json` 에 남기는 이유가 여기 있다.
+그리고 서로 비교할 런들은 val batch 를 같은 값으로 맞춰야 한다.
+
+> 이 때문에 `train/results.csv` 의 마지막 에폭 값과 `val/` 값이 완전히 같지 않다.
+> 학습 중 검증은 trainer 가 `batch*2` 로 돌리고(§7.6), `val/` 은 `VAL_ARGS` 의 batch 로 돌린다.
+> best.pt 와 last.pt 차이에 이 rect 배치 차이가 더해진 것이다.
 
 ### 7.8 Windows 에서는 `if __name__ == "__main__":` 필수
 

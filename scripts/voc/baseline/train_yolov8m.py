@@ -21,7 +21,7 @@ PROJECT = "voc/baseline/yolov8m"
 VAL_ARGS = dict(
     data="VOC.yaml",
     imgsz=640,
-    batch=8,  # mAP 에는 영향 없다 (VRAM/속도만)
+    batch=8,  # rect=True 라 mAP 에도 영향이 있다 — README §7.7
     workers=2,
     device=0,
     conf=0.001,  # detect val 기본값 (predict 는 0.25)
