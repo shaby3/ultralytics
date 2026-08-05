@@ -45,7 +45,8 @@ if __name__ == "__main__":
             "name": "train",
             "epochs": 100,
             "patience": 30,
-            "batch": 32,  # baseline n 과 동일하게 고정 — 이게 깨지면 KD 효과와 batch 효과가 교락된다
+            "batch": 16,  # 32 는 에폭 말 검증(batch*2) 스파이크로 시스템이 버벅여서 낮췄다.
+            # accumulate 가 명목 64 를 유지해(README §4) 유효 batch 는 baseline 과 같고 BN 통계만 다르다.
             "imgsz": 640,
             "workers": 2,
             "exist_ok": True,

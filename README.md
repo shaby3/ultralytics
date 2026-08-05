@@ -180,10 +180,18 @@ teacher 를 s→m 으로 바꿔도 neck kd_loss 는 0.318→0.330 으로 거의 
 
 ### KD 학습 비용 (Phase 0, 1에폭 실측)
 
-**batch 는 5런 전부 32 로 고정한다** — baseline n 과 같은 값이라 비교가 유지된다.
-teacher 는 no_grad 추론이라 학습 구간 VRAM 은 ~5.1G/6.1G 로 여유가 있다.
-단 peak reserved 는 7.5~10.2G 까지 뛰는데(에폭 말 검증 batch 64 구간으로 추정, §7.6),
-Windows 드라이버가 시스템 RAM 으로 흘려 OOM 없이 완주한다. 그 비용은 아래 시간에 포함돼 있다.
+**batch 는 5런 전부 16 으로 고정한다.** 처음엔 baseline n 과 같은 32 로 계획했으나,
+batch 32 에서는 에폭 말 검증(trainer 가 `batch*2`=64 로 고정, §7.6) 구간의 peak 가
+물리 VRAM 을 3~4GB 넘어 시스템 RAM 으로 스필됐고 그동안 컴퓨터 전체가 버벅였다.
+16 이면 검증이 batch 32 로 내려가 스필이 사라진다.
+
+**baseline(batch 32)과의 비교는 유지된다** — ultralytics 는 gradient accumulation 으로
+명목 batch(`nbs=64`)를 맞춘다. 32 는 2번, 16 은 4번 누적이라 optimizer 가 보는 유효 batch 는
+둘 다 64 이고 weight_decay 스케일도 같다. 남는 차이는 BN 통계(배치당 16 vs 32)뿐이다.
+KD 5런끼리는 전부 batch 16 이라 내부 비교(Q1·Q2·Q3)에는 아예 영향이 없고,
+baseline 대비 절대 gain 에만 이 경미한 차이가 얹힌다.
+
+아래는 batch 32 실측이다. batch 16 은 스필이 없어져 비슷하거나 약간 빠를 것으로 본다.
 
 | 조합 | 에폭당 (검증 포함) | 100에폭 추정 |
 |------|:---:|:---:|
@@ -194,6 +202,10 @@ Windows 드라이버가 시스템 RAM 으로 흘려 OOM 없이 완주한다. 그
 
 baseline n(4.74분/에폭) 대비 1.85~2.33배. head 가 지점 6개라 neck 보다 25% 느리다.
 **Phase 1 = 약 2.1일, 5런 총 3.5일** 수준으로 잡는다.
+
+kd_loss 는 배치 평균 MSE 라 batch 크기와 무관하다 — 위 weight 정규화(batch 32 실측)는 그대로 유효하다.
+보고용 `val/` 재평가(`VAL_ARGS`)는 batch 32 를 유지한다 — baseline n 의 `val/` 과 같은 조건이고,
+이 단계는 teacher 가 없어 스필도 렉도 없다.
 
 head0 과 head1 은 **채널이 완전히 같다** — `cv2`/`cv3` 가 `Sequential(Conv, Conv, nn.Conv2d)` 라
 `.0` 과 `.1` 의 출력 채널이 동일하기 때문이다. aligner 파라미터 수까지 같아서 세 수준 중 가장 깨끗한 비교다.
