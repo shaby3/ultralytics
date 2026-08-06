@@ -1,16 +1,19 @@
-# python scripts/voc/kd_head1/train_yolov8n_from_8s.py
-"""KD training — yolov8n student, yolov8s(VOC 학습본) teacher, Detect head 2번째 conv 에서 증류.
+# python scripts/voc/kd_head1/train_yolov8n_from_8s_coco.py
+"""KD training — yolov8n student, yolov8s **COCO-pretrained** teacher, Detect head 2번째 conv.
 
-Phase 1(증류 위치 비교) 3런 중 하나. teacher·aligner·loss 는 세 런 공통이고
-layers 와 weight 만 다르다 — ultralytics/cfg/distill_head1_from_8s_voc.yaml 참조.
-head1 이 weight 정규화의 기준(1.0)이다 — 이전 회차 실험(head .1, weight 1.0)과 이어진다 (README §4).
-head0 과 head1 은 출력 채널이 같아 aligner 까지 동일하다 — 세 수준 중 가장 깨끗한 비교.
+Phase 2(Q1: teacher 출처) 런. train_yolov8n_from_8s.py 에서 **teacher 만** 바꾼 통제 런이다 —
+위치·aligner·weight·epochs·batch 가 모두 같아야 teacher 출처 하나의 효과가 분리된다.
+설정을 하나라도 건드리면 Q1 이 교락되므로, 비교 대상과 함께 바꿀 것.
 
-EMA 유령 hook 리크 수정 후 1에폭 실측 7.8분(batch 16, peak 2.9G/6.1G) — README §7.8.
-100에폭 약 13시간.
+비교 대상: runs/detect/voc/kd_head1/yolov8n_from_8s/ (teacher s-VOC, mAP50-95 0.6342)
 
-결과: runs/detect/voc/kd_head1/yolov8n_from_8s/{train,val}/  — 완주, mAP50-95 0.6342
-Q1(teacher 출처) 비교 대상: train_yolov8n_from_8s_coco.py (teacher 만 다른 통제 런)
+이 런을 먼저 도는 이유: 이전 회차(50에폭)의 COCO-teacher 런이 절반의 에폭으로 0.6428 을 냈다
+(runs/detect/voc/kd_head1/yolov8n_from_8s_coco_50ep/). teacher 축이 예상보다 클 수 있어서,
+남은 위치 스윕(neck·head0)을 돌리기 전에 teacher 부터 확정한다. README §6 참조.
+
+1에폭 실측 7.8분 → 100에폭 약 13시간 (RTX 4050 6GB, batch 16).
+
+결과: runs/detect/voc/kd_head1/yolov8n_from_8s_coco/{train,val}/
 """
 
 import json
@@ -21,7 +24,7 @@ from ultralytics.engine.distiller import create_distiller
 from ultralytics.models.yolo.detect.train import DetectionTrainer
 
 # runs/detect 를 붙이면 안 된다 — ultralytics 가 RUNS_DIR/<task>/ 아래로 합친다 (README §7.5)
-PROJECT = "voc/kd_head1/yolov8n_from_8s"
+PROJECT = "voc/kd_head1/yolov8n_from_8s_coco"
 
 # 평가 조건을 명시해 박는다. 기본값에 의존하면 업스트림이 바꿀 때 과거 결과를 재현할 수 없다. README §7.7
 VAL_ARGS = dict(
@@ -47,14 +50,13 @@ if __name__ == "__main__":
             "name": "train",
             "epochs": 100,
             "patience": 30,
-            "batch": 16,  # 32 도 돌지만 학습 구간 5.8G/6.1G 로 빠듯해 여유를 둔다 (README §4).
-            # accumulate 가 명목 64 를 유지해 유효 batch 는 baseline(32) 과 같고 BN 통계만 다르다.
+            "batch": 16,  # _from_8s 런과 동일해야 한다 — 다르면 Q1 이 teacher x batch 교락이 된다
             "imgsz": 640,
             "workers": 2,
             "exist_ok": True,
             "device": 0,
             "amp": True,
-            "distill_cfg": "ultralytics/cfg/distill_head1_from_8s_voc.yaml",
+            "distill_cfg": "ultralytics/cfg/distill_head1_from_8s_coco.yaml",
         }
     )
     trainer.train()

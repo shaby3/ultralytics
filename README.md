@@ -224,6 +224,26 @@ Phase 1 실행 — baseline 과 마찬가지로 순차 실행한다 (동시 실�
 Phase 2·3 은 승자 위치의 config 와 스크립트를 복사해 `teacher.model` 만 바꾼다
 (`_from_8s_coco` / `_from_8m`). 결과 경로 규칙은 [5. 결과 저장 구조](#5-결과-저장-구조) 참조.
 
+**Phase 2 를 head`.1` 에서 먼저 돌린다 — 계획된 순서에서 벗어난 결정이다.**
+
+```bash
+.venv/Scripts/python.exe scripts/voc/kd_head1/train_yolov8n_from_8s_coco.py
+```
+
+원래는 Phase 1 세 런을 끝내고 승자 위치에서 Phase 2 를 돌기로 했다. 순서를 바꾼 이유는
+[6. 실험 결과](#두-회차의-비교--q1-의-예고편)의 두 회차 비교다 — 이전 회차 COCO-teacher 런이
+절반의 에폭으로 더 높은 점수를 냈다. teacher 축이 예상보다 크다면 남은 위치 스윕(약 26시간)을
+잘못된 teacher 위에서 쓰게 된다. 그래서 **teacher 를 먼저 확정하고 위치를 쓴다.**
+
+- **COCO 가 크게 낫다** → 위치 스윕(neck·head`.0`)을 COCO teacher 로 진행, Phase 1 을 재정렬한다.
+- **비슷하다** → 원래 Phase 1 로 복귀. 이전 회차 차이는 epochs·batch 탓으로 정리된다.
+
+어느 쪽이든 이미 끝난 `yolov8n_from_8s`(teacher s-VOC) 런이 Q1 의 대조군으로 그대로 쓰이므로
+낭비되는 런은 없다. `distill_head1_from_8s_coco.yaml` 은 `_voc` 판과 **`teacher.model` 한 줄만**
+다르고, COCO teacher(nc=80)의 증류 지점 채널이 VOC 학습본(nc=20)과 같아서
+(box 64 / cls 128 — `c3 = max(ch0, min(nc,100))` 에서 s 는 ch0=128 이라 nc 무관)
+aligner 구조까지 동일하다.
+
 > 이전 회차(epochs 50)의 `run_phase6_kd*.py` · `run_neck_kd.py` 와 그 config 들은 삭제했다.
 > 필요하면 git 히스토리에서 복구한다.
 

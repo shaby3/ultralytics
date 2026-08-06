@@ -1,0 +1,36 @@
+# KD config — Detect head 2번째 conv 에서 증류. teacher = yolov8s COCO-pretrained.
+#
+# Phase 2(Q1: teacher 출처) 런. distill_head1_from_8s_voc.yaml 에서
+# teacher.model 한 줄만 다르고 layers·aligner·loss·weight 는 전부 같다.
+# 이 대응이 깨지면 Q1 이 teacher 출처 × 그 항목의 교락이 된다.
+#
+# teacher 는 nc=80 이지만 증류 지점 채널은 VOC 학습본(nc=20)과 동일하다:
+#   c2 = max(16, ch0//4, reg_max*4) = 64        ← nc 와 무관
+#   c3 = max(ch0, min(nc, 100)) = max(128, 80) = 128 ← s 는 ch0=128 이라 nc 80/20 모두 128
+# 따라서 aligner 구조까지 같고, teacher 출처만의 효과가 분리된다.
+# distiller 는 teacher nc 를 제약하지 않는다.
+
+teacher:
+  # COCO-pretrained 체크포인트 (repo 루트). VOC 학습본은 _voc 쪽 config 참조.
+  model: yolov8s.pt
+  layers:
+    - "model.22.cv2.0.1" # box P3/8
+    - "model.22.cv2.1.1" # box P4/16
+    - "model.22.cv2.2.1" # box P5/32
+    - "model.22.cv3.0.1" # cls P3/8
+    - "model.22.cv3.1.1" # cls P4/16
+    - "model.22.cv3.2.1" # cls P5/32
+
+student:
+  layers:
+    - "model.22.cv2.0.1"
+    - "model.22.cv2.1.1"
+    - "model.22.cv2.2.1"
+    - "model.22.cv3.0.1"
+    - "model.22.cv3.1.1"
+    - "model.22.cv3.2.1"
+
+aligner: ConvBNSiLUAligner # README §4 — teacher feature 가 BN+SiLU 출력이므로 고정
+loss: mse
+# head1 이 weight 정규화 기준(1.0)이다 — _voc 런과 같은 값이어야 Q1 비교가 성립한다.
+weight: 1.0
