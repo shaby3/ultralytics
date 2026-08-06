@@ -417,11 +417,48 @@ early stopping 이 안 걸려 best 에폭이 99 / 99 / 100 이었으니 예상�
 | yolov8s | 18.8h | 17.9h | 거의 일치 |
 | yolov8m | 33.8h | 37.8h | 추정보다 10% 빠름 |
 
-### KD
+### KD — 현재 회차 (100에폭, batch 16, teacher s-VOC)
 
-| 실험 | teacher | KD 위치 | aligner | mAP50 | mAP50-95 | ΔmAP50-95 |
-|------|---------|---------|---------|:---:|:---:|:---:|
-| - | - | - | - | - | - | - |
+`val/` 의 `best.pt` 재평가 기준. Δ 는 baseline n(100에폭, 0.6288) 대비.
+
+| 위치 | weight | mAP50 | mAP50-95 | Precision | Recall | ΔmAP50-95 |
+|------|:---:|:---:|:---:|:---:|:---:|:---:|
+| head`.1` | 1 | 0.8362 | **0.6342** | 0.8241 | 0.7568 | **+0.55pt** |
+| head`.0` | 10 | - | - | - | - | - |
+| neck | 20 | - | - | - | - | - |
+
+### KD — 이전 회차 (50에폭, batch 32, teacher **COCO-pretrained** `yolov8s.pt`)
+
+git 히스토리에서 복원했다(`8e45746f~1`). 당시엔 weight 정규화도 aligner 고정도 없었다.
+Δ 는 같은 회차 baseline n(50에폭 **batch 16**, 0.6121) 대비 — batch 가 달라 교락이 있다.
+
+| 위치 | aligner | weight | mAP50 | mAP50-95 | 최종 `kd_loss` | ΔmAP50-95 |
+|------|---------|:---:|:---:|:---:|:---:|:---:|
+| head`.1` | ConvBNSiLU | 1 | 0.8430 | **0.6428** | 0.974 | +3.06pt |
+| head`.1` | ConvAligner | 1 | 0.8428 | 0.6398 | 0.966 | +2.76pt |
+| neck | ConvAligner | 1 | 0.8214 | 0.6193 | **0.038** | +0.71pt |
+
+**이전 회차의 "neck 이 head 보다 나쁘다"는 결과는 위치 효과가 아니다.** neck 의 최종 `kd_loss` 가
+0.038 로 head1(0.974)의 1/25 다 — `weight=1.0` 이 neck 에서는 사실상 KD 를 끈 것과 같았다.
+현재 회차가 weight 를 정규화한 이유이고([§4](#weight-는-위치별-kd_loss-실측으로-정규화했다)),
+그래서 Q2 는 아직 답이 나오지 않은 열린 질문이다.
+
+### 두 회차의 비교 — Q1 의 예고편
+
+| | 이전 회차 head`.1` | 현재 회차 head`.1` |
+|---|:---:|:---:|
+| teacher | **COCO-pretrained** | **VOC 학습본** |
+| epochs / batch | 50 / 32 | 100 / 16 |
+| aligner / weight | ConvBNSiLU / 1 | ConvBNSiLU / 1 |
+| **mAP50-95** | **0.6428** | **0.6342** |
+
+**절반의 에폭으로 COCO teacher 쪽이 0.86pt 높다.** "VOC 로 fine-tune 한 teacher 가 당연히 낫다"는
+가정과 반대다. 다만 teacher 말고도 epochs·batch 가 함께 다르므로 이것만으로 결론지을 수 없다 —
+teacher 만 바꾼 통제 런이 [Phase 2](#진행-순서) 다.
+
+한 가지 더: baseline 은 50→100에폭에서 0.6121→0.6288(**+1.67pt**) 올랐는데, KD 는 같은 구간에서
+0.6428→0.6342(**−0.86pt**) 로 내려갔다. teacher 차이일 수도 있고, 긴 스케줄이 KD 이득을
+희석하는 것일 수도 있다. Phase 2 가 전자를 가려준다.
 
 ---
 
