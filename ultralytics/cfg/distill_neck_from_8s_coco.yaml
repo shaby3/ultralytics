@@ -1,0 +1,40 @@
+# KD config — neck 출력(P3/P4/P5)에서 증류. teacher = yolov8s COCO-pretrained.
+#
+# 재정렬된 Phase 1(증류 위치 3수준, teacher COCO 고정) 중 하나.
+# distill_head0_/distill_head1_from_8s_coco.yaml 과 teacher·aligner·loss 가 같고
+# layers 와 weight 만 다르다. 비교를 위해 이 대응을 깨지 말 것.
+#
+# distill_neck_from_8s_voc.yaml 에서 teacher.model 한 줄만 다르다.
+# neck 지점(layer 15/18/21)은 C2f 라 채널이 nc 와 무관하다 — COCO(nc=80) teacher 라도
+# P3 128 / P4 256 / P5 512 로 VOC 학습본과 같고, aligner 구조도 그대로다.
+#
+# 증류 지점: neck 출력 3 지점 (layer 15/18/21 = C2f, Detect 의 입력)
+# 채널 (student n → teacher s): P3 64→128, P4 128→256, P5 256→512
+#   → head(6지점, 64→64·64→128)보다 aligner 가 훨씬 크다. neck 이 이기면 "위치 효과"인지
+#     "aligner 용량 효과"인지 해석에 단서를 달아야 한다.
+# C2f 는 마지막이 cv2 = Conv 이므로 neck 출력도 Conv(Conv2d+BN+SiLU) 출력이다
+#   → head 와 동일한 근거로 ConvBNSiLUAligner 가 맞다.
+
+teacher:
+  # COCO-pretrained 체크포인트 (repo 루트). VOC 학습본은 _voc 쪽 config 참조.
+  model: yolov8s.pt
+  layers:
+    - 15 # P3/8
+    - 18 # P4/16
+    - 21 # P5/32
+
+student:
+  layers:
+    - 15
+    - 18
+    - 21
+
+aligner: ConvBNSiLUAligner # README §4 — teacher feature 가 BN+SiLU 출력이므로 고정
+loss: mse
+# 1에폭 kd_loss 실측(teacher s-VOC, batch 32): neck 0.318 / head0 0.667 / head1 5.992.
+# head1 을 1.0 기준으로 세 위치의 초기 KD 기여를 맞춘다: 5.992/0.318 ≈ 18.8 → 20 (반올림)
+#
+# teacher 를 COCO 로 바꿔도 이 값을 재보정하지 않는다 — head1 의 1에폭 kd_loss 가
+# VOC 6.14 → COCO 5.56 으로 10% 밖에 안 움직였다(자릿수 동일). 위치 간 19배 차이를
+# 막는 게 목적이므로 이 정도 변동은 무해하다. 근거는 README §4 참조.
+weight: 20.0

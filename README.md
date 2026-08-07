@@ -40,28 +40,41 @@ KD 본실험은 축이 3개다: **증류 위치**(3수준) × **teacher 출처**
 **총 5런.** 위치가 3수준으로 가장 넓으니 가장 싼 teacher(s)로 먼저 쓸어야 총비용이 최소가 된다.
 그리고 위치가 나쁘면 gain 이 0 에 가까워서, 위치를 먼저 정하지 않으면 teacher 비교가 전부 노이즈 위에서 이뤄진다.
 
+#### 실제 진행은 1↔2 가 뒤집혔다
+
+위 표는 **원래 계획**이다. head`.1` 한 위치만 Phase 1 로 돌린 뒤 Phase 2 를 먼저 실행했고
+(이유는 [§4](#phase-2-를-head1-에서-먼저-돌린다--계획된-순서에서-벗어난-결정이다)),
+그 결과 **COCO teacher 가 s-VOC 를 +1.53pt 로 이겨서** 남은 위치 스윕을 COCO teacher 위로 옮겼다.
+
+| 순서 | 런 | teacher | 상태 |
+|:---:|------|:---:|:---:|
+| 1 | head`.1` | s-VOC | 완료 — 0.6342 |
+| 2 | head`.1` | **s-COCO** | 완료 — **0.6496** ← Q1 확정 |
+| 3 | neck | s-COCO | 대기 |
+| 4 | head`.0` | s-COCO | 대기 |
+| 5 | 승자 위치 | **m**-COCO | 대기 (Phase 3) |
+
+여전히 5런이고, 두 head`.1` 런이 Q1 의 대조쌍이자 위치 스윕의 한 수준을 겸한다.
+**대신 위치 비교는 s-VOC 가 아니라 s-COCO 위에서 성립한다** — 아래 주장 범위가 그만큼 달라진다.
+
 ### 각 phase 가 허용하는 주장의 범위
 
-**Q3(teacher 크기)은 같은 출처의 s 와 비교한다.** Phase 3 의 m 은 Phase 2 승자 출처를 따르므로,
-비교 대상은 Phase 2 가 COCO 로 이겼으면 s-COCO(Phase 2), VOC 로 이겼으면 s-VOC(Phase 1) 다.
-어느 쪽이든 **한 축만 다른 비교**가 되고, 그 런은 이미 손에 있다.
+**Q3(teacher 크기)은 같은 출처의 s 와 비교한다.** Phase 2 가 COCO 로 이겼으므로
+비교 대상은 **s-COCO(0.6496)** 로 확정됐다. **한 축만 다른 비교**가 되고, 그 런은 이미 손에 있다.
 
 teacher 크기 추이는 3점으로 읽는다: **teacher 없음(baseline n) → s → m.**
 teacher 가 클수록 나빠지는 구간이 보이면 capacity gap 을 짚는 근거가 된다.
 
-teacher 2×2 그리드(출처 × 크기)에서 **3칸이 채워지고 1칸이 빈다.** 그 칸을 채울지는 Phase 2 결과로 정한다.
+teacher 2×2 그리드(출처 × 크기)에서 **3칸이 채워지고 1칸(m-VOC)이 빈다.**
+사전에 정해둔 규칙은 "COCO vs VOC 차이가 ~0.5pt 미만이면 빈 칸을 건너뛰고, 크면 1런 추가한다"였다.
+실측 **+1.53pt** 는 큰 주효과이므로 **m-VOC 1런 추가가 규칙상 켜진다.**
+"COCO-pretrained teacher 가 낫다"를 s 에서만 재고 일반화하면, m 에서 방향이 뒤집힐 때 논지가 무너지기 때문이다.
+다만 이 런은 우선순위가 가장 낮다 — Phase 3 로 m-COCO 를 먼저 확보한 뒤 GPU 여유를 보고 정한다.
 
-| Phase 2 승자 | Phase 3 | 빠지는 칸 |
-|:---:|:---:|:---:|
-| VOC | m-VOC | m-COCO |
-| COCO | m-COCO | m-VOC |
-
-- Phase 2 의 COCO vs VOC 차이가 **작으면(~0.5pt 미만) 빈 칸은 건너뛴다** — 교호작용을 논할 주효과가 없다.
-- **크면 1런 추가한다.** 큰 주효과일 때가 교호작용이 결론을 뒤집을 수 있는 상황이다.
-  "VOC 학습 teacher 가 낫다"를 s 에서만 재고 일반화하면, m 에서 방향이 뒤집힐 때 논지가 무너진다.
-
-**Phase 1 의 위치 순위는 s-VOC 에서만 확인한 것이다.** 다른 teacher 에서도 같은 순위인지는 검증하지 않는다
-(greedy 탐색의 한계). 필요하면 2위 위치를 최고 teacher 로 1런 돌려 방어한다.
+**위치 순위는 s-COCO 에서만 확인하게 된다.** 다른 teacher 에서도 같은 순위인지는 검증하지 않는다
+(greedy 탐색의 한계). 손에 있는 s-VOC head`.1` 런이 부분적 방어는 해준다 —
+같은 위치에서 teacher 만 바꿨을 때 순위가 아니라 크기만 변했다면 교호작용이 약하다는 신호다.
+필요하면 2위 위치를 최고 teacher 로 1런 더 돌려 방어한다.
 
 ### 결과 해석 시 주의
 
@@ -149,13 +162,28 @@ W&B 는 로그인된 상태이며, 끄고 싶을 때는 `WANDB_MODE=disabled` �
 
 ### KD 학습
 
-**Phase 1 — 증류 위치 3수준.** teacher 는 셋 다 s-VOC 고정, aligner·loss 도 동일하고 `layers` 와 `weight` 만 다르다.
+**위치 3수준.** teacher 는 셋 다 **s-COCO** 고정, aligner·loss 도 동일하고 `layers` 와 `weight` 만 다르다.
 
 | distill config | KD 위치 | 지점 | student n → teacher s 채널 | weight |
 |----------------|---------|:---:|----------------------------|:---:|
-| `distill_neck_from_8s_voc.yaml` | neck 출력 (layer 15/18/21) | 3 | 64→128, 128→256, 256→512 | **20** |
-| `distill_head0_from_8s_voc.yaml` | Detect head **1번째** conv | 6 | box 64→64 ×3, cls 64→128 ×3 | **10** |
-| `distill_head1_from_8s_voc.yaml` | Detect head **2번째** conv | 6 | box 64→64 ×3, cls 64→128 ×3 | **1** (기준) |
+| `distill_neck_from_8s_coco.yaml` | neck 출력 (layer 15/18/21) | 3 | 64→128, 128→256, 256→512 | **20** |
+| `distill_head0_from_8s_coco.yaml` | Detect head **1번째** conv | 6 | box 64→64 ×3, cls 64→128 ×3 | **10** |
+| `distill_head1_from_8s_coco.yaml` | Detect head **2번째** conv | 6 | box 64→64 ×3, cls 64→128 ×3 | **1** (기준) |
+
+각 config 에는 `teacher.model` 만 다른 `_from_8s_voc.yaml` 짝이 있다. **head`.1` 만 양쪽을 다 돌렸고**
+(그게 Q1 이다), neck·head`.0` 의 `_voc` 판은 안 돌린다 — Q1 이 COCO 로 결론났기 때문이다.
+지우지는 않는다. 교호작용을 방어해야 할 때 되살릴 대조군이다.
+
+**COCO teacher(nc=80)와 VOC 학습본(nc=20)의 증류 지점 채널은 세 위치 전부 같다** — 실측 확인:
+
+| | neck 15/18/21 | head`.0` box/cls | head`.1` box/cls |
+|---|:---:|:---:|:---:|
+| s-COCO (nc=80) | 128 / 256 / 512 | 64 / 128 | 64 / 128 |
+| s-VOC (nc=20) | 128 / 256 / 512 | 64 / 128 | 64 / 128 |
+
+neck 은 C2f 라 애초에 nc 와 무관하고, head 는 `c2 = max(16, ch0//4, reg_max*4) = 64`,
+`c3 = max(ch0, min(nc,100))` 에서 s 는 `ch0=128` 이라 nc 가 80 이든 20 이든 128 이다.
+따라서 **aligner 구조까지 동일**해서 teacher 출처만의 효과가 깨끗하게 분리된다.
 
 ### weight 는 위치별 kd_loss 실측으로 정규화했다
 
@@ -173,7 +201,9 @@ KD 강도 비교가 된다. 그래서 **head1 을 1.0 기준으로 두고**(이�
 역수로 올려 초기 KD 기여를 맞췄다: neck 18.8→**20**, head0 9.0→**10** (반올림).
 
 teacher 를 s→m 으로 바꿔도 neck kd_loss 는 0.318→0.330 으로 거의 안 변한다.
-**크기를 지배하는 건 teacher 가 아니라 위치다** — Phase 2·3 에서 weight 를 재보정하지 않는 근거.
+teacher 출처도 마찬가지다 — head`.1` 의 1에폭 kd_loss 가 **VOC 6.14 → COCO 5.56** 으로 10% 움직였을 뿐이다.
+**크기를 지배하는 건 teacher 가 아니라 위치다** — teacher 를 COCO 로 바꾸면서도 weight 를 재보정하지 않은 근거.
+정규화의 목적이 위치 간 19배 자릿수 차이를 막는 것이므로 10% 변동은 무해하다.
 
 한계: 이 정규화는 1에폭 시점의 기여율만 맞춘다. 학습이 진행되면 비율은 다시 갈린다.
 위치별 최적 weight 스윕이 엄밀하지만 런이 3배가 되어, 자릿수 교락만 막는 선에서 멈춘 것이다.
@@ -212,37 +242,42 @@ neck 이 이기면 "위치 효과"인지 "aligner 용량 효과"인지 해석에
 > 세 config 는 서로 대응이 맞아야 비교가 성립한다. teacher·aligner·loss 를 한쪽만 바꾸면
 > Q2 가 위치 × 그 항목의 교락이 된다. weight 는 예외로 **일부러 다르다** — 위 정규화 참조.
 
-Phase 1 실행 — baseline 과 마찬가지로 순차 실행한다 (동시 실행은 VRAM 부족):
-
-```bash
-.venv/Scripts/python.exe scripts/voc/kd_neck/train_yolov8n_from_8s.py; .venv/Scripts/python.exe scripts/voc/kd_head0/train_yolov8n_from_8s.py; .venv/Scripts/python.exe scripts/voc/kd_head1/train_yolov8n_from_8s.py
-```
-
 각 스크립트는 baseline 스크립트와 같은 골격이다 — 학습 후 `best.pt` 재평가(`val/`)와
 지표 기록(`results.csv` · `metrics.json`)까지 수행한다.
+결과 경로 규칙은 [5. 결과 저장 구조](#5-결과-저장-구조) 참조.
 
-Phase 2·3 은 승자 위치의 config 와 스크립트를 복사해 `teacher.model` 만 바꾼다
-(`_from_8s_coco` / `_from_8m`). 결과 경로 규칙은 [5. 결과 저장 구조](#5-결과-저장-구조) 참조.
+#### Phase 2 를 head`.1` 에서 먼저 돌린다 — 계획된 순서에서 벗어난 결정이다
 
-**Phase 2 를 head`.1` 에서 먼저 돌린다 — 계획된 순서에서 벗어난 결정이다.**
-
-```bash
-.venv/Scripts/python.exe scripts/voc/kd_head1/train_yolov8n_from_8s_coco.py
-```
-
-원래는 Phase 1 세 런을 끝내고 승자 위치에서 Phase 2 를 돌기로 했다. 순서를 바꾼 이유는
+원래는 위치 3런을 끝내고 승자 위치에서 Phase 2 를 돌기로 했다. 순서를 바꾼 이유는
 [6. 실험 결과](#두-회차의-비교--q1-의-예고편)의 두 회차 비교다 — 이전 회차 COCO-teacher 런이
 절반의 에폭으로 더 높은 점수를 냈다. teacher 축이 예상보다 크다면 남은 위치 스윕(약 26시간)을
 잘못된 teacher 위에서 쓰게 된다. 그래서 **teacher 를 먼저 확정하고 위치를 쓴다.**
 
-- **COCO 가 크게 낫다** → 위치 스윕(neck·head`.0`)을 COCO teacher 로 진행, Phase 1 을 재정렬한다.
-- **비슷하다** → 원래 Phase 1 로 복귀. 이전 회차 차이는 epochs·batch 탓으로 정리된다.
+- **COCO 가 크게 낫다** → 위치 스윕(neck·head`.0`)을 COCO teacher 로 진행, 순서를 재정렬한다.
+- **비슷하다** → 원래 순서로 복귀. 이전 회차 차이는 epochs·batch 탓으로 정리된다.
 
-어느 쪽이든 이미 끝난 `yolov8n_from_8s`(teacher s-VOC) 런이 Q1 의 대조군으로 그대로 쓰이므로
-낭비되는 런은 없다. `distill_head1_from_8s_coco.yaml` 은 `_voc` 판과 **`teacher.model` 한 줄만**
-다르고, COCO teacher(nc=80)의 증류 지점 채널이 VOC 학습본(nc=20)과 같아서
-(box 64 / cls 128 — `c3 = max(ch0, min(nc,100))` 에서 s 는 ch0=128 이라 nc 무관)
-aligner 구조까지 동일하다.
+**결과는 전자였다 — COCO +1.53pt** ([§6](#kd--위치-스윕-100에폭-batch-16)).
+그래서 남은 두 위치는 `_from_8s_coco` 로 돌린다. 이미 끝난 `yolov8n_from_8s`(s-VOC) 런은
+Q1 의 대조군으로 그대로 쓰이므로 낭비되는 런은 없다.
+
+#### 실행
+
+남은 위치 스윕 — baseline 과 마찬가지로 순차 실행한다 (동시 실행은 VRAM 부족):
+
+```bash
+.venv/Scripts/python.exe scripts/voc/kd_neck/train_yolov8n_from_8s_coco.py; .venv/Scripts/python.exe scripts/voc/kd_head0/train_yolov8n_from_8s_coco.py
+```
+
+이미 끝난 두 런 (재현용):
+
+```bash
+.venv/Scripts/python.exe scripts/voc/kd_head1/train_yolov8n_from_8s.py; .venv/Scripts/python.exe scripts/voc/kd_head1/train_yolov8n_from_8s_coco.py
+```
+
+> `scripts/voc/kd_{neck,head0}/train_yolov8n_from_8s.py`(s-VOC 판)도 남아 있지만 **돌리지 않는다.**
+> Q1 이 COCO 로 결론나서, 이 둘을 돌리면 이미 진 teacher 위에서 위치를 비교하는 26시간이 된다.
+
+Phase 3 은 승자 위치의 config·스크립트를 복사해 `teacher.model` 만 `yolov8m.pt` 로 바꾼다(`_from_8m`).
 
 > 이전 회차(epochs 50)의 `run_phase6_kd*.py` · `run_neck_kd.py` 와 그 config 들은 삭제했다.
 > 필요하면 git 히스토리에서 복구한다.
@@ -291,12 +326,14 @@ runs/detect/
       yolov8s/
       yolov8m/
     kd_head1/                 # method = 증류 위치
-      yolov8n_from_8s/        #   Phase 1 — teacher s-VOC
-      yolov8n_from_8s_coco/   #   Phase 2 — teacher 출처만 교체
-      yolov8n_from_8m/        #   Phase 3 — teacher 크기만 교체
+      yolov8n_from_8s/        #   teacher s-VOC          — 완료 0.6342
+      yolov8n_from_8s_coco/   #   teacher 출처만 교체     — 완료 0.6496  ← Q1 대조쌍
         train/  val/
+      yolov8n_from_8m_coco/   #   teacher 크기만 교체     — 대기 (Phase 3)
     kd_head0/
+      yolov8n_from_8s_coco/   #   대기 — 위치 스윕
     kd_neck/
+      yolov8n_from_8s_coco/   #   대기 — 위치 스윕
   neu_det/
     baseline/
       yolov8n/
@@ -437,15 +474,55 @@ early stopping 이 안 걸려 best 에폭이 99 / 99 / 100 이었으니 예상�
 | yolov8s | 18.8h | 17.9h | 거의 일치 |
 | yolov8m | 33.8h | 37.8h | 추정보다 10% 빠름 |
 
-### KD — 현재 회차 (100에폭, batch 16, teacher s-VOC)
+### KD — 위치 스윕 (100에폭, batch 16)
 
-`val/` 의 `best.pt` 재평가 기준. Δ 는 baseline n(100에폭, 0.6288) 대비.
+`val/` 의 `best.pt` 재평가 기준. Δ 는 baseline n(100에폭, 0.6284) 대비.
 
-| 위치 | weight | mAP50 | mAP50-95 | Precision | Recall | ΔmAP50-95 |
-|------|:---:|:---:|:---:|:---:|:---:|:---:|
-| head`.1` | 1 | 0.8362 | **0.6342** | 0.8241 | 0.7568 | **+0.55pt** |
-| head`.0` | 10 | - | - | - | - | - |
-| neck | 20 | - | - | - | - | - |
+| 위치 | teacher | weight | mAP50 | mAP50-95 | Precision | Recall | ΔmAP50-95 |
+|------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| head`.1` | s-VOC | 1 | 0.8362 | 0.6342 | 0.8241 | 0.7568 | +0.58pt |
+| head`.1` | **s-COCO** | 1 | 0.8499 | **0.6496** | 0.8287 | 0.7732 | **+2.12pt** |
+| head`.0` | s-COCO | 10 | - | - | - | - | - |
+| neck | s-COCO | 20 | - | - | - | - | - |
+
+### Q1 확정 — COCO-pretrained teacher 가 VOC 학습본을 +1.53pt 로 이긴다
+
+위 두 head`.1` 런은 **`teacher.model` 한 줄만 다른 통제쌍**이다. 위치·aligner·loss·weight·epochs·batch·seed 가 전부 같고,
+증류 지점 채널까지 동일해 aligner 구조도 같다([§4](#kd-학습)). **teacher 출처 하나만 분리된 비교다.**
+
+세 가지가 이 차이를 노이즈에서 떼어놓는다.
+
+**1. 학습 전 구간에서 앞선다.** 최종 시점만의 우연이 아니다 (`train/results.csv`, mAP50-95):
+
+| epoch | 10 | 30 | 50 | 70 | 90 | 100 |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| baseline n | 0.4104 | 0.5754 | 0.6169 | 0.6253 | 0.6283 | 0.6288 |
+| head`.1` s-VOC | 0.4797 | 0.5945 | 0.6227 | 0.6313 | 0.6333 | 0.6342 |
+| head`.1` **s-COCO** | **0.5093** | **0.6115** | **0.6354** | **0.6440** | **0.6467** | **0.6489** |
+| COCO − VOC | +2.96pt | +1.70pt | +1.27pt | +1.27pt | +1.34pt | +1.47pt |
+
+초반 격차가 크고(ep10 +2.96pt) 이후 +1.3pt 부근에서 안정된다.
+수렴 후에도 격차가 유지된다는 건 "COCO teacher 가 빨리 배우게 한다"가 아니라 **도달 지점이 다르다**는 뜻이다.
+
+**2. 20개 클래스 중 19개가 개선됐다.** 유일한 하락은 cat −0.14pt 로 측정 노이즈 수준이다.
+개선 폭 상위는 tvmonitor +3.24, boat +2.77, bottle +2.74, pottedplant +2.65 — **작고 어려운 객체 위주**다.
+COCO 80클래스 사전학습이 준 표현 다양성이 VOC 소수 클래스로 전이됐다는 해석과 맞는다.
+
+**3. 격차가 seed 노이즈 규모를 넘는다.** +1.53pt 는 [§1 에서 경계하기로 한 수준](#결과-해석-시-주의)(~0.3pt)의 5배다.
+
+kd_loss 도 COCO 쪽이 낮게 수렴했다 (0.976 vs 1.088) — student 가 COCO teacher feature 를 더 잘 따라갔다.
+
+**해석.** VOC 로 fine-tune 한 teacher 는 그 데이터셋에서 mAP 가 더 높지만(s-VOC 0.6750),
+**증류 대상으로서는 COCO-pretrained 쪽이 낫다.** 20클래스에 특화되며 좁아진 feature 보다
+80클래스에서 만들어진 일반적 feature 가 student 에게 더 풍부한 신호를 준다는 것이다.
+"teacher 의 task 성능"과 "teacher 의 증류 가치"가 같은 방향이 아니라는, 이 실험의 가장 뾰족한 결과다.
+
+**한계 — 한 위치(head`.1`)에서만 확인했다.** 남은 위치 스윕을 COCO 로 옮긴 결정은
+teacher 출처 × 위치 교호작용이 없다는 미검증 가정 위에 있다. 논문에는 범위를 명시해야 한다.
+
+> **두 KD 런 모두 100에폭에서 아직 오르는 중이다.** best epoch 가 정확히 100 이고 patience 30 이 한 번도 안 걸렸다
+> (baseline 은 ep99 에서 정점 후 평탄). **KD 런은 미포화 상태**라 위 절대 수치는 하한이고,
+> 에폭을 늘리면 격차가 더 벌어질 수 있다. 세 런의 조건이 같으므로 비교 자체는 유효하다.
 
 ### KD — 이전 회차 (50에폭, batch 32, teacher **COCO-pretrained** `yolov8s.pt`)
 
@@ -473,12 +550,19 @@ git 히스토리에서 복원했다(`8e45746f~1`). 당시엔 weight 정규화도
 | **mAP50-95** | **0.6428** | **0.6342** |
 
 **절반의 에폭으로 COCO teacher 쪽이 0.86pt 높다.** "VOC 로 fine-tune 한 teacher 가 당연히 낫다"는
-가정과 반대다. 다만 teacher 말고도 epochs·batch 가 함께 다르므로 이것만으로 결론지을 수 없다 —
-teacher 만 바꾼 통제 런이 [Phase 2](#진행-순서) 다.
+가정과 반대다. 다만 teacher 말고도 epochs·batch 가 함께 달라 이것만으로는 결론지을 수 없었다.
 
-한 가지 더: baseline 은 50→100에폭에서 0.6121→0.6288(**+1.67pt**) 올랐는데, KD 는 같은 구간에서
-0.6428→0.6342(**−0.86pt**) 로 내려갔다. teacher 차이일 수도 있고, 긴 스케줄이 KD 이득을
-희석하는 것일 수도 있다. Phase 2 가 전자를 가려준다.
+**이 예고편은 맞았다.** teacher 만 바꾼 통제 런(위 [Q1 확정](#q1-확정--coco-pretrained-teacher-가-voc-학습본을-153pt-로-이긴다))이
+같은 방향으로, 더 큰 폭(+1.53pt)으로 재현했다. 즉 위 표의 0.86pt 는 teacher 효과가
+epochs·batch 차이에 **일부 상쇄된** 값이었다.
+
+그 상쇄가 무엇이었는지도 이제 읽힌다. baseline 은 50→100에폭에서 0.6121→0.6284(**+1.63pt**) 올랐는데
+이전 회차 KD 는 0.6428, 현재 회차 COCO-KD 는 100에폭에 0.6496 이다 — 같은 teacher 기준 **+0.68pt**.
+**긴 스케줄이 KD 이득을 희석하는 건 맞다**(baseline 이 +1.63pt 올라올 때 KD 는 +0.68pt 만 올랐다).
+
+이 분해는 **잠정적이다.** batch(32→16)가 함께 다르고, 이전 회차 수치는 `val/` 이 없어 `train/` 마지막 에폭 값이다
+(현재 회차 기준 둘의 차이는 0.0005 미만이라 결론을 바꿀 크기는 아니다).
+Q1 결론에는 영향이 없다 — Q1 의 두 런은 둘 다 100에폭·batch 16·`val/` 재평가값이다.
 
 ---
 

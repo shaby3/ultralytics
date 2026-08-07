@@ -1,0 +1,45 @@
+# KD config — Detect head 1번째 conv 에서 증류. teacher = yolov8s COCO-pretrained.
+#
+# 재정렬된 Phase 1(증류 위치 3수준, teacher COCO 고정) 중 하나.
+# distill_neck_/distill_head1_from_8s_coco.yaml 과 teacher·aligner·loss 가 같고
+# layers 와 weight 만 다르다. 비교를 위해 이 대응을 깨지 말 것.
+#
+# distill_head0_from_8s_voc.yaml 에서 teacher.model 한 줄만 다르다.
+# teacher 는 nc=80 이지만 증류 지점 채널은 VOC 학습본(nc=20)과 동일하다:
+#   c2 = max(16, ch0//4, reg_max*4) = 64        ← nc 와 무관
+#   c3 = max(ch0, min(nc, 100)) = max(128, 80) = 128 ← s 는 ch0=128 이라 nc 80/20 모두 128
+#
+# 증류 지점: box(cv2)/cls(cv3) 분기 × 3 스케일 = 6 지점
+# 채널 (student n → teacher s): box 64 → 64, cls 64 → 128
+#   → head1 과 채널이 완전히 같다. cv2 = Sequential(Conv(x,c2,3), Conv(c2,c2,3), Conv2d) 로
+#     .0 과 .1 의 출력 채널이 둘 다 c2 이기 때문. 따라서 aligner 파라미터 수도 동일하고,
+#     head0 vs head1 은 세 수준 중 가장 깨끗한 비교다 (깊이만 다르다).
+
+teacher:
+  # COCO-pretrained 체크포인트 (repo 루트). VOC 학습본은 _voc 쪽 config 참조.
+  model: yolov8s.pt
+  layers:
+    - "model.22.cv2.0.0" # box P3/8
+    - "model.22.cv2.1.0" # box P4/16
+    - "model.22.cv2.2.0" # box P5/32
+    - "model.22.cv3.0.0" # cls P3/8
+    - "model.22.cv3.1.0" # cls P4/16
+    - "model.22.cv3.2.0" # cls P5/32
+
+student:
+  layers:
+    - "model.22.cv2.0.0"
+    - "model.22.cv2.1.0"
+    - "model.22.cv2.2.0"
+    - "model.22.cv3.0.0"
+    - "model.22.cv3.1.0"
+    - "model.22.cv3.2.0"
+
+aligner: ConvBNSiLUAligner # README §4 — teacher feature 가 BN+SiLU 출력이므로 고정
+loss: mse
+# 1에폭 kd_loss 실측(teacher s-VOC, batch 32): neck 0.318 / head0 0.667 / head1 5.992.
+# head1 을 1.0 기준으로 세 위치의 초기 KD 기여를 맞춘다: 5.992/0.667 ≈ 9.0 → 10 (반올림)
+#
+# teacher 를 COCO 로 바꿔도 이 값을 재보정하지 않는다 — head1 의 1에폭 kd_loss 가
+# VOC 6.14 → COCO 5.56 으로 10% 밖에 안 움직였다(자릿수 동일). 근거는 README §4 참조.
+weight: 10.0
