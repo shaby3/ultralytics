@@ -192,11 +192,16 @@ def create_distiller(trainer_cls):
 
             Resolves the aligner class by name via attribute lookup on the aligner
             module, so new aligner classes added to aligner.py are automatically
-            available without modifying this file.
+            available without modifying this file. Optional `aligner_args` in the distill
+            config are bound to the class, for aligners that take more than the two channel
+            counts MultiScaleAligner passes (e.g. MGDAligner's lambda_mgd).
             """
+            from functools import partial
+
             from ultralytics.nn.modules import aligner as aligner_mod
 
             aligner_name = self.distill_cfg.get("aligner", "ConvAligner")
+            aligner_args = self.distill_cfg.get("aligner_args") or {}
 
             # MultiScaleAligner is a container that wraps per-point aligners — it has
             # a different __init__ signature and is already used internally below, so
@@ -218,6 +223,12 @@ def create_distiller(trainer_cls):
                 )
                 raise ValueError(f"Unknown aligner '{aligner_name}'. Available aligners: {available}")
 
+            # 검증이 끝난 뒤에 묶는다 — partial 로 감싸면 issubclass 검사가 통하지 않는다.
+            # MultiScaleAligner 는 aligner_cls(sc, tc) 로만 호출하므로 나머지 인자는 여기서 미리 채운다.
+            if aligner_args:
+                LOGGER.info(f"Aligner args: {aligner_args}")
+                aligner_cls = partial(aligner_cls, **aligner_args)
+
             self.aligner_module = aligner_mod.MultiScaleAligner(
                 student_channels,
                 teacher_channels,
@@ -237,11 +248,17 @@ def create_distiller(trainer_cls):
 
         def _setup_kd_loss(self):
             """Initialize KD feature loss function."""
-            from ultralytics.utils.loss import KDFeatureLoss
+            from ultralytics.utils.loss import KDFeatureLoss, PKDLoss
 
             loss_name = self.distill_cfg.get("loss", "mse")
-            loss_map = {"mse": nn.MSELoss(reduction="mean")}
-            self.kd_loss_fn = KDFeatureLoss(loss_fn=loss_map.get(loss_name))
+            # reduction 은 전부 mean 으로 통일한다. 참조 구현들이 쓰는 sum/N + 고유 alpha 관례를 섞으면
+            # 정규화 체계가 둘이 되어, 위치별로 실측해 맞춘 기존 weight 기준과 비교가 끊긴다 (README §4).
+            loss_map = {"mse": nn.MSELoss(reduction="mean"), "pkd": PKDLoss()}
+            # 미등록 이름을 조용히 넘기면 KDFeatureLoss 의 `loss_fn or MSELoss()` 가 MSE 로 되돌려서,
+            # 오타 하나로 13시간을 MSE 로 돌고 결과를 다른 기법으로 착각하게 된다. aligner 쪽과 같이 막는다.
+            if loss_name not in loss_map:
+                raise ValueError(f"Unknown KD loss '{loss_name}'. Available losses: {sorted(loss_map)}")
+            self.kd_loss_fn = KDFeatureLoss(loss_fn=loss_map[loss_name])
 
         # --- Training setup override ---
 

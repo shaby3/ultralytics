@@ -1248,6 +1248,51 @@ class TVPSegmentLoss(TVPDetectLoss):
         return cls_loss, vp_loss[1]
 
 
+class PKDLoss(nn.Module):
+    """Pearson-correlation feature distillation loss (PKD, https://arxiv.org/abs/2207.02039).
+
+    Normalizes each channel to zero mean / unit variance before MSE, which makes the loss
+    scale-free: the result equals `1 - r` where r is the Pearson correlation between the two
+    feature maps. Plain MSE instead scales with the variance of the distillation point, which
+    is why per-position KD weights have to be hand-normalized (see README §4). PKD removes that.
+
+    The trade-off: standardization discards activation magnitude entirely, so only the pattern
+    is distilled, not how strongly the teacher fires.
+
+    Takes a single tensor pair — KDFeatureLoss already loops over distillation points, averages
+    them, and detaches the teacher, and the trainer applies the KD weight. The reference
+    implementation folds all three in; copying it wholesale would double-count.
+    """
+
+    def forward(self, student_feat: torch.Tensor, teacher_feat: torch.Tensor) -> torch.Tensor:
+        """Compute 1 - Pearson correlation between one student/teacher feature pair.
+
+        Args:
+            student_feat (torch.Tensor): Aligned student feature, shape (N, C, H, W).
+            teacher_feat (torch.Tensor): Teacher feature, same shape.
+
+        Returns:
+            torch.Tensor: Scalar loss in fp32.
+        """
+        assert student_feat.shape == teacher_feat.shape, (
+            f"PKD requires matching shapes, got {tuple(student_feat.shape)} vs {tuple(teacher_feat.shape)}. "
+            "The aligner should already match channels, and both hooks sit at the same stride."
+        )
+        # mse(standardized) / 2 == 1 - r:  E[(x-y)^2] = 1 - 2r + 1 = 2(1 - r)
+        return F.mse_loss(self._norm(student_feat), self._norm(teacher_feat)) / 2
+
+    @staticmethod
+    def _norm(feat: torch.Tensor) -> torch.Tensor:
+        """Standardize each channel over the (N, H, W) axes to zero mean and unit variance."""
+        n, c, h, w = feat.shape
+        # fp32 로 올린다 — KD forward 가 autocast 안이라 aligner conv 출력이 fp16 으로 들어온다.
+        # 그대로 두면 N*H*W(P3 에서 10만개 이상) 누적에서 결과가 ~2e-4 흔들린다. 학습을 망칠 크기는
+        # 아니지만 되돌리는 비용이 사실상 없고, 이 값이 weight 정규화의 기준이 되므로 재현성 쪽에 둔다.
+        feat = feat.permute(1, 0, 2, 3).reshape(c, -1).float()
+        feat = (feat - feat.mean(dim=-1, keepdim=True)) / (feat.std(dim=-1, keepdim=True) + 1e-6)
+        return feat.reshape(c, n, h, w).permute(1, 0, 2, 3)
+
+
 class KDFeatureLoss:
     """Feature-level Knowledge Distillation loss.
 
