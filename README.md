@@ -40,28 +40,43 @@ KD 본실험은 축이 3개다: **증류 위치**(3수준) × **teacher 출처**
 **총 5런.** 위치가 3수준으로 가장 넓으니 가장 싼 teacher(s)로 먼저 쓸어야 총비용이 최소가 된다.
 그리고 위치가 나쁘면 gain 이 0 에 가까워서, 위치를 먼저 정하지 않으면 teacher 비교가 전부 노이즈 위에서 이뤄진다.
 
-#### 실제 진행은 1↔2 가 뒤집혔다
+#### 실제 진행은 계획과 두 군데가 다르다
 
-위 표는 **원래 계획**이다. head`.1` 한 위치만 Phase 1 로 돌린 뒤 Phase 2 를 먼저 실행했고
+위 표는 **원래 계획**이다. 두 번 바꿨다.
+
+**① Phase 1↔2 를 뒤집었다.** head`.1` 한 위치만 돌린 뒤 Phase 2 를 먼저 실행했고
 (이유는 [§4](#phase-2-를-head1-에서-먼저-돌린다--계획된-순서에서-벗어난-결정이다)),
-그 결과 **COCO teacher 가 s-VOC 를 +1.53pt 로 이겨서** 남은 위치 스윕을 COCO teacher 위로 옮겼다.
+**COCO teacher 가 s-VOC 를 +1.53pt 로 이겨서** 남은 위치 스윕을 COCO teacher 위로 옮겼다.
+그래서 **위치 비교는 s-VOC 가 아니라 s-COCO 위에서 성립한다.**
 
-| 순서 | 런 | teacher | 상태 |
-|:---:|------|:---:|:---:|
-| 1 | head`.1` | s-VOC | 완료 — 0.6342 |
-| 2 | head`.1` | **s-COCO** | 완료 — **0.6496** ← Q1 확정 |
-| 3 | neck | s-COCO | 대기 |
-| 4 | head`.0` | s-COCO | 대기 |
-| 5 | 승자 위치 | **m**-COCO | 대기 (Phase 3) |
+**② Phase 3 을 teacher 크기(m)에서 KD 기법으로 바꿨다.** 위치·teacher 두 축이 닫히고 나니
+남은 질문 중 teacher 크기는 결과가 어느 쪽이든 해석이 정해져 있는 반면(크면 좋거나, capacity gap 이거나),
+기법 축은 지금 남아 있는 방법론적 약점을 직접 건드린다 — MSE 는 위치마다 kd_loss 가 19~28배 벌어져
+weight 를 손보정해야 했고([§4](#weight-는-위치별-kd_loss-실측으로-정규화했다)), 그 잔차가
+Q2 결론에 교락으로 남아 있다. **teacher 크기는 최후순위 부록 ablation 으로 미룬다.**
 
-여전히 5런이고, 두 head`.1` 런이 Q1 의 대조쌍이자 위치 스윕의 한 수준을 겸한다.
-**대신 위치 비교는 s-VOC 가 아니라 s-COCO 위에서 성립한다** — 아래 주장 범위가 그만큼 달라진다.
+| 순서 | 런 | 바뀌는 축 | 상태 |
+|:---:|------|------|:---:|
+| 1 | head`.1` × s-VOC | — | 완료 0.6342 |
+| 2 | head`.1` × **s-COCO** | teacher 출처 | 완료 **0.6496** ← Q1 확정 |
+| 3 | neck × s-COCO | 증류 위치 | 완료 0.6408 |
+| 4 | head`.0` × s-COCO | 증류 위치 | 완료 0.6484 ← Q2 확정 |
+| 5 | head`.1` × s-COCO × **PKD** | KD 기법 | 대기 |
+| 6 | head`.1` × s-COCO × **MGD** | KD 기법 | 대기 |
+| — | head`.1` × **m**-COCO | teacher 크기 | 최후순위 |
+
+1~4 번이 Q1·Q2 를 닫았고, 2번 런이 세 질문의 공통 기준점 역할을 한다 — Q1 의 대조쌍이자,
+위치 스윕의 한 수준이자, 기법 스윕의 MSE 기준이다.
 
 ### 각 phase 가 허용하는 주장의 범위
 
-**Q3(teacher 크기)은 같은 출처의 s 와 비교한다.** Phase 2 가 COCO 로 이겼으므로
-비교 대상은 **s-COCO(0.6496)** 로 확정됐다. **한 축만 다른 비교**가 되고, 그 런은 이미 손에 있다.
+**기법 축(Phase 3)은 head`.1`·s-COCO 위에서만 확인한다.** 세 수준 모두 위치·teacher·epochs·batch 가
+같고 loss 또는 aligner 만 다르다. 다만 **MGD 는 한 축만 다른 비교가 아니다** — 정렬부·마스킹·생성 블록
+셋이 함께 바뀌고 증류 경로 파라미터가 11.3배가 된다. 방법의 정의라 피할 수 없고,
+MGD 가 이기면 λ=0 런으로 마스킹 순효과를 가른다 ([§4](#phase-3--kd-기법-loss-와-aligner)).
 
+**Q3(teacher 크기)은 미뤘지만 비교 대상은 이미 확정됐다** — Phase 2 가 COCO 로 이겼으므로
+**s-COCO(0.6496)** 와 한 축만 다른 비교가 되고, 그 런은 손에 있다.
 teacher 크기 추이는 3점으로 읽는다: **teacher 없음(baseline n) → s → m.**
 teacher 가 클수록 나빠지는 구간이 보이면 capacity gap 을 짚는 근거가 된다.
 
@@ -69,12 +84,12 @@ teacher 2×2 그리드(출처 × 크기)에서 **3칸이 채워지고 1칸(m-VOC
 사전에 정해둔 규칙은 "COCO vs VOC 차이가 ~0.5pt 미만이면 빈 칸을 건너뛰고, 크면 1런 추가한다"였다.
 실측 **+1.53pt** 는 큰 주효과이므로 **m-VOC 1런 추가가 규칙상 켜진다.**
 "COCO-pretrained teacher 가 낫다"를 s 에서만 재고 일반화하면, m 에서 방향이 뒤집힐 때 논지가 무너지기 때문이다.
-다만 이 런은 우선순위가 가장 낮다 — Phase 3 로 m-COCO 를 먼저 확보한 뒤 GPU 여유를 보고 정한다.
+다만 m 런들은 전부 기법 축 뒤로 밀렸다.
 
-**위치 순위는 s-COCO 에서만 확인하게 된다.** 다른 teacher 에서도 같은 순위인지는 검증하지 않는다
-(greedy 탐색의 한계). 손에 있는 s-VOC head`.1` 런이 부분적 방어는 해준다 —
-같은 위치에서 teacher 만 바꿨을 때 순위가 아니라 크기만 변했다면 교호작용이 약하다는 신호다.
-필요하면 2위 위치를 최고 teacher 로 1런 더 돌려 방어한다.
+**위치 순위는 s-COCO 에서만, 기법 순위는 head`.1` 에서만 확인한 것이다.** greedy 탐색의 한계다.
+손에 있는 s-VOC head`.1` 런이 위치 쪽 부분적 방어는 해준다 —
+teacher 를 바꿔도 head`.1` 이 여전히 상위라 교호작용이 약하다는 신호다.
+필요하면 2위 설정을 최고 조합으로 1런 더 돌려 방어한다.
 
 ### 결과 해석 시 주의
 
@@ -282,6 +297,91 @@ Phase 3 은 승자 위치의 config·스크립트를 복사해 `teacher.model` �
 > 이전 회차(epochs 50)의 `run_phase6_kd*.py` · `run_neck_kd.py` 와 그 config 들은 삭제했다.
 > 필요하면 git 히스토리에서 복구한다.
 
+### Phase 3 — KD 기법 (loss 와 aligner)
+
+위치·teacher 가 닫힌 뒤의 축이다. **head`.1` · s-COCO · 100에폭 · batch 16 고정** 위에서 3수준을 비교한다.
+
+| 수준 | 무엇이 바뀌나 | config | weight | 상태 |
+|---|---|---|:---:|:---:|
+| **MSE** (기준) | — | `distill_head1_from_8s_coco.yaml` | 1.0 | 완료 0.6496 |
+| **PKD** | loss 만 | `..._coco_pkd.yaml` | **8.0** | 대기 |
+| **MGD** | aligner 만 (loss 는 mse 그대로) | `..._coco_mgd.yaml` | **1.4** | 대기 |
+
+**PKD** ([arXiv 2207.02039](https://arxiv.org/abs/2207.02039)) — feature 를 채널별로 평균 0·분산 1 로
+표준화한 뒤 MSE. 수학적으로 `1 − r`(Pearson 상관)과 같다. `E[(x−y)²] = 1 − 2r + 1 = 2(1−r)` 이라 2로 나눈다.
+**스케일에 무관해서 위치마다 kd_loss 가 19~28배 벌어지던 문제가 원천적으로 사라진다.**
+대가는 teacher activation 의 크기 정보를 버리고 패턴만 증류한다는 것이다.
+
+**MGD** ([arXiv 2205.01529](https://arxiv.org/abs/2205.01529)) — **loss 가 아니다.**
+student feature 의 공간 위치를 λ 비율로 가린 뒤, 작은 conv block 이 살아남은 것만으로
+teacher feature 를 *생성*하게 만든다. 마스킹과 생성 블록에 학습 파라미터가 있어 **aligner 자리**에 들어간다.
+참조 구현(mmrazor)도 `MGDConnector`(파라미터 있음) + `MGDLoss`(평범한 MSE)로 쪼개져 있다.
+구조는 그대로 따랐다 — 채널이 다를 때만 1×1 Conv 투영, 그 뒤 `Conv3×3 → ReLU → Conv3×3`.
+head`.1` 6지점에서는 box(64→64)에 투영이 없고 cls(64→128)에만 생긴다.
+
+참조 구현과 의도적으로 다른 점은 **스케일 관례 둘뿐이고 구조는 동일하다**: reduction 을 `sum/N` 대신
+`mean` 으로 두고, `alpha_mgd` 대신 이 저장소의 `weight` 를 쓴다. 둘을 섞으면 정규화 체계가 둘이 되어
+지금까지 위치별로 실측해 맞춘 weight 기준과 비교가 끊긴다.
+
+#### MGD 는 한 축만 다른 비교가 아니다
+
+MSE·PKD 런 대비 **① 정렬부**(ConvBNSiLU → 1×1 Conv), **② 랜덤 마스킹**, **③ 생성 블록** 셋이 함께 바뀐다.
+증류 경로 파라미터 실측(head`.1` 6지점 = box 64→64 ×3, cls 64→128 ×3):
+
+| | 파라미터 | aligner 대비 | yolov8n 본체(3,157,200) 대비 |
+|---|---:|---:|---:|
+| `ConvBNSiLUAligner` (MSE·PKD) | 100,608 | 1× | 3.2% |
+| `MGDAligner` (1×1 + 생성 블록) | 1,132,032 | **11.3×** | **35.9%** |
+
+배율은 커널(3×3 vs 1×1)에서 9배, 폭에서 1.3배가 곱해진 값이다. 추론 때 버려지지만 학습 중 증류 경로에
+그만한 용량이 얹힌다. **MGD 라는 방법의 정의라 피할 수 없다** — 결과에 이 단서를 달고,
+MGD 가 이기면 `aligner_args: {lambda_mgd: 0.0}` 런(생성 블록은 두고 마스킹만 끔)을 추가해
+**λ=0.65 vs λ=0 차이 = 마스킹 순효과**로 가른다.
+
+#### weight 는 여기서도 프로브로 맞춘다
+
+기법마다 kd_loss 자릿수가 다르므로 위치 스윕과 같은 규칙을 쓴다 — **MSE 런의 초기 KD 비중(54.3%)에 맞춘다.**
+
+```
+w = (kd_mse / task_mse) × task_method / kd_method       (w_mse = 1)
+```
+
+기준값은 과거 기록이 아니라 프로브의 mse 런에서 새로 뽑는다. 같은 세션·같은 조건이라 비교가 깨끗하다.
+task loss 가 세 런에서 4.554/4.554/4.556 으로 사실상 같아, 식은 실질적으로 **`w = kd_mse / kd_method`** 다.
+
+```bash
+.venv/Scripts/python.exe scripts/voc/probe_kd_scale.py
+```
+
+결과는 `scripts/voc/probe_kd_scale.json` 에 런마다 즉시 저장되고 이미 잰 항목은 건너뛴다 —
+중간에 죽어도 재실행하면 이어붙는다. **실측 (batch 16, 각 ~10분):**
+
+| 기법 | ep1 kd_loss | KD 비중 (w=1) | 산출 w | **채택 w** | 보정 후 KD 비중 | peak VRAM | 분/에폭 |
+|---|---:|---:|---:|:---:|---:|---:|---:|
+| mse | 5.2608 | 53.6% | 1.000 | **1.0** | 53.6% | 2.68 GB | 9.9 |
+| pkd | 0.6476 | 12.4% | 8.124 | **8.0** | 53.2% | 2.84 GB | 10.2 |
+| mgd | 3.7226 | 45.0% | 1.414 | **1.4** | 53.4% | 2.59 GB | 10.2 |
+
+세 기법의 초기 KD 비중이 **0.4pt 안에 모였다.** PKD 는 `1 − r` 이라 1 부근에 갇혀 MSE 의 1/8 이고,
+정규화 없이 돌렸으면 12.4% 로 사실상 KD 를 절반쯤 끈 셈이 됐을 것이다.
+MGD 가 같은 MSE 인데도 낮은 건 생성 블록이 teacher feature 를 직접 맞추도록 학습되기 때문이다.
+
+**MGD 의 비용은 예상보다 작다** — 에폭 시간이 MSE 대비 +3%, VRAM 은 셋 다 2.6~2.8GB 로
+6.1GB 대비 여유가 있다. batch 16 을 그대로 간다.
+
+> **프로브는 AdamW 로 돌았다** — `optimizer=auto` 가 `iterations > 10000` 에서만 MuSGD 를 고르는데
+> 1에폭은 1,035 iteration 이다 ([§7.3](#73-optimizerauto-는-100에폭에서-musgd-를-고른다)).
+> 그래서 mse 의 ep1 kd_loss 가 본 런(MuSGD) 기록 5.5596 이 아니라 5.2608 로 나왔다.
+> **정규화에는 영향이 없다** — 세 프로브가 모두 같은 AdamW 아래라 비율이 상쇄되고,
+> 기준을 본 런 값으로 바꿔 계산해도 weight 는 8.12→8.37 / 1.41→1.46 으로 **3.0% 움직일 뿐**이다.
+> 이 정규화가 이미 감수하는 반올림 폭(18.8→20 = 6%)보다 작다.
+
+#### 실행
+
+```bash
+.venv/Scripts/python.exe scripts/voc/kd_head1/train_yolov8n_from_8s_coco_pkd.py; .venv/Scripts/python.exe scripts/voc/kd_head1/train_yolov8n_from_8s_coco_mgd.py
+```
+
 ### 증류 지점
 
 **Head KD** — Detect head(`model.22`) 내부, box(cv2)/cls(cv3) 분기의 **2번째 conv 출력** × 3 스케일 = 6 지점
@@ -373,6 +473,15 @@ YOLO(model.trainer.best).val(project=PROJECT, name="val", ...)
 **VOC 학습본이 기본이고 COCO 만 표시한다.** VOC 가 이 실험의 주 조건이라 접미사 없는 쪽에 둔다.
 `_voc` 를 붙이면 네 variant 중 셋에 붙어 구분에 기여하지 않는다.
 (distill config 파일명은 반대로 `_voc` 를 명시한다 — `ultralytics/cfg/` 에는 VOC 아닌 config 도 놓일 수 있다.)
+
+#### 기법 축은 variant 뒤에 붙인다
+
+Phase 3 에서 축이 하나 늘었다. `yolov8n_from_8s_coco_pkd` / `_mgd` 처럼 **teacher 뒤에 기법을 붙인다.**
+
+접미사가 없으면 MSE 다 — teacher 규칙과 같은 논리로, 기준 수준을 접미사 없는 쪽에 둔다.
+표면상 variant 가 teacher 와 기법 두 축을 담는 것처럼 보이지만, **기법 스윕 안에서 teacher 는 s-COCO 로
+고정이라 실제로 갈리는 축은 기법 하나**다. method 를 `kd_head1_pkd` 로 쪼개지 않는 이유는
+method = 증류 위치 규칙이 깨지기 때문이다.
 
 ### `val/` 은 왜 따로 두는가
 
@@ -482,8 +591,46 @@ early stopping 이 안 걸려 best 에폭이 99 / 99 / 100 이었으니 예상�
 |------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | head`.1` | s-VOC | 1 | 0.8362 | 0.6342 | 0.8241 | 0.7568 | +0.58pt |
 | head`.1` | **s-COCO** | 1 | 0.8499 | **0.6496** | 0.8287 | 0.7732 | **+2.12pt** |
-| head`.0` | s-COCO | 10 | - | - | - | - | - |
-| neck | s-COCO | 20 | - | - | - | - | - |
+| head`.0` | s-COCO | 10 | 0.8471 | 0.6484 | 0.8208 | 0.7716 | +2.00pt |
+| neck | s-COCO | 20 | 0.8410 | 0.6408 | 0.8217 | 0.7659 | +1.24pt |
+
+네 런 모두 `epochs=100, batch=16, imgsz=640, patience=30, amp=True`, aligner `ConvBNSiLUAligner`,
+loss `mse` 로 동일하고 `layers` 와 `weight` 만 다르다. early stopping 은 어디서도 걸리지 않았다.
+
+### Q2 확정 — head`.0` ≈ head`.1` > neck
+
+**head`.1` 과 head`.0` 은 0.11pt 차이라 구분되지 않는다.** [§1 의 기준](#결과-해석-시-주의)(0.3pt)의 1/3 이다.
+궤적을 보면 더 분명하다 — 두 런이 계속 자리를 바꾼다:
+
+| epoch | 10 | 30 | 50 | 70 | 90 | 100 |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| neck | 0.4657 | 0.5918 | 0.6263 | 0.6352 | 0.6385 | 0.6408 |
+| head`.0` | 0.4998 | 0.6050 | 0.6374 | 0.6437 | 0.6467 | 0.6480 |
+| head`.1` | 0.5093 | 0.6115 | 0.6354 | 0.6440 | 0.6467 | 0.6489 |
+| head`.1` − head`.0` | +0.95pt | +0.65pt | **−0.20pt** | +0.03pt | −0.00pt | +0.09pt |
+
+**neck 과의 0.76pt 차이는 실재한다.** ep20 이후 전 구간에서 head 두 위치가 neck 위에 있고
+격차가 부호를 바꾼 적이 없다.
+
+**weight 정규화는 제 역할을 했다.** ep1 실측 기준 실효 KD 기여:
+
+| 위치 | ep1 kd_loss | ×weight | task loss | KD 비중 | (weight=1 이었다면) |
+|---|:---:|:---:|:---:|:---:|:---:|
+| neck | 0.200 | 4.01 | 4.78 | 45.6% | 4.0% |
+| head`.0` | 0.437 | 4.37 | 4.71 | 48.1% | 8.5% |
+| head`.1` | 5.560 | 5.56 | 4.67 | 54.3% | 54.3% |
+
+정규화가 없었으면 4.0% / 8.5% / 54.3% 였을 것이 **45.6~54.3% 안으로 모였다.** 다만 완전히 같지는 않고
+head`.1` 이 neck 보다 1.19배 강하다. 그래서 정확한 표현은 "neck 이 나쁘다"가 아니라
+**"neck 은 같은 정도의 KD 신호로 head 만큼 얻어내지 못한다"** 다.
+반대로 neck vs head`.0` 은 45.6% vs 48.1% 로 거의 같아 **이 쌍이 위치 효과를 가장 깨끗하게 보여준다**(0.76pt).
+
+> **네 런 모두 100에폭에서 아직 오르는 중이다.** best epoch 가 100/100/99/100 이고 patience 30 이
+> 한 번도 안 걸렸다(baseline 은 ep99 정점 후 평탄). 위 절대 수치는 하한이다.
+> 위치 순위가 0.3pt 안에 몰린 게 "구분 안 됨"이 아니라 "아직 안 갈림"일 수 있다.
+
+**한계 — 위치 순위는 s-COCO 에서만 확인한 것이다.** 다른 teacher 에서 같은 순위인지는 검증하지 않았다.
+손에 있는 s-VOC head`.1` 런이 부분적 방어는 해준다(teacher 를 바꿔도 head`.1` 은 여전히 상위다).
 
 ### Q1 확정 — COCO-pretrained teacher 가 VOC 학습본을 +1.53pt 로 이긴다
 
@@ -721,3 +868,28 @@ hook 은 모델 밖의 상태(storage)를 참조하는데, deepcopy 는 그 연�
 `workers > 0` 이면 DataLoader 가 spawn 으로 자식 프로세스를 만든다(Windows 는 fork 없음).
 가드가 없으면 자식이 스크립트 전체를 재실행해 **프로세스가 무한 증식**한다.
 학습 호출은 반드시 가드 안에 둔다.
+
+### 7.10 distill config 의 `loss` 오타가 조용히 MSE 로 떨어졌다 (수정됨)
+
+`_setup_kd_loss` 가 이랬다:
+
+```python
+loss_map = {"mse": nn.MSELoss(reduction="mean")}
+self.kd_loss_fn = KDFeatureLoss(loss_fn=loss_map.get(loss_name))   # 미등록 이름 -> None
+```
+
+`loss_map.get()` 이 `None` 을 주고, `KDFeatureLoss.__init__` 의 `loss_fn or nn.MSELoss(...)` 가
+그걸 **MSE 로 되돌린다.** 그래서 `loss: pkd` 라고 써도 오류 없이 학습이 돌고,
+13시간 뒤 결과를 PKD 로 착각하게 된다. 같은 파일의 `_setup_aligner` 는 이름이 틀리면
+`ValueError` 를 던지는데 loss 쪽만 안 막혀 있었다.
+
+**침묵하는 기본값은 실험 코드에서 특히 나쁘다** — 오타가 실패가 아니라 *다른 실험*으로 나타난다.
+등록되지 않은 이름은 aligner 와 같은 방식으로 거부하도록 고쳤다.
+
+```python
+if loss_name not in loss_map:
+    raise ValueError(f"Unknown KD loss '{loss_name}'. Available losses: {sorted(loss_map)}")
+```
+
+`KDFeatureLoss` 의 `or` 기본값 자체는 그대로 뒀다 — `loss_fn=None` 의 문서화된 동작이고,
+상류에서 막으면 충분하다.

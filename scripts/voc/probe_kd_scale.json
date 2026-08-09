@@ -1,0 +1,26 @@
+{
+  "mse": {
+    "kd_loss": 5.260764835652519,
+    "task_loss": 4.553947925567627,
+    "kd_share": 0.5360080283183458,
+    "peak_vram_gb": 2.677734375,
+    "minutes": 9.888408362865448,
+    "config": "ultralytics/cfg/distill_head1_from_8s_coco.yaml"
+  },
+  "pkd": {
+    "kd_loss": 0.6475780269949909,
+    "task_loss": 4.554051399230957,
+    "kd_share": 0.12449522523269067,
+    "peak_vram_gb": 2.83984375,
+    "minutes": 10.21725055774053,
+    "config": "ultralytics/cfg/distill_head1_from_8s_coco_pkd.yaml"
+  },
+  "mgd": {
+    "kd_loss": 3.7225582039874507,
+    "task_loss": 4.556475639343262,
+    "kd_share": 0.44963679028636994,
+    "peak_vram_gb": 2.587890625,
+    "minutes": 10.232122965653737,
+    "config": "ultralytics/cfg/distill_head1_from_8s_coco_mgd.yaml"
+  }
+}

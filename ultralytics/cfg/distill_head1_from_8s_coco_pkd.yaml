@@ -1,0 +1,41 @@
+# KD config — Detect head 2번째 conv 에서 증류. teacher = yolov8s COCO-pretrained. loss = PKD.
+#
+# Phase 3(KD 기법 비교) 3수준 중 하나. distill_head1_from_8s_coco.yaml 에서
+# loss 와 weight 만 다르고 teacher·layers·aligner 는 전부 같다.
+# 이 대응이 깨지면 기법 축이 위치/teacher 와 교락된다.
+#
+# PKD (https://arxiv.org/abs/2207.02039): feature 를 채널별로 평균 0·분산 1 로 표준화한 뒤 MSE.
+# 수학적으로 1 - r (Pearson 상관)과 같다. MSE 와 달리 스케일에 무관해서, 위치마다 kd_loss 크기가
+# 19~28배씩 벌어지던 문제(README §4)가 원천적으로 사라진다.
+# 대가: teacher activation 의 크기 정보를 버리고 패턴만 증류한다.
+#
+# 구현은 ultralytics/utils/loss.py 의 PKDLoss. 참조 구현과 달리 텐서 한 쌍만 받는다 —
+# 지점 순회·평균·detach 는 KDFeatureLoss 가, weight 는 트레이너가 이미 하기 때문이다.
+
+teacher:
+  # COCO-pretrained 체크포인트 (repo 루트). 기법 3수준이 전부 이 teacher 로 고정된다.
+  model: yolov8s.pt
+  layers:
+    - "model.22.cv2.0.1" # box P3/8
+    - "model.22.cv2.1.1" # box P4/16
+    - "model.22.cv2.2.1" # box P5/32
+    - "model.22.cv3.0.1" # cls P3/8
+    - "model.22.cv3.1.1" # cls P4/16
+    - "model.22.cv3.2.1" # cls P5/32
+
+student:
+  layers:
+    - "model.22.cv2.0.1"
+    - "model.22.cv2.1.1"
+    - "model.22.cv2.2.1"
+    - "model.22.cv3.0.1"
+    - "model.22.cv3.1.1"
+    - "model.22.cv3.2.1"
+
+aligner: ConvBNSiLUAligner # MSE 런과 동일하게 고정 — 기법 축만 갈린다
+loss: pkd
+# 1에폭 프로브 실측 (scripts/voc/probe_kd_scale.json): kd_loss mse 5.2608 vs pkd 0.6476.
+# PKD 는 1-r 이라 1 부근에 갇혀 MSE 의 1/8 이다. 그대로 두면 초기 KD 비중이 53.6% -> 12.4% 로
+# 떨어져 "기법 비교"가 아니라 "KD 강도 비교"가 된다. 5.2608/0.6476 = 8.12 -> 8.0 (반올림).
+# 보정 후 초기 KD 비중 53.2% (MSE 53.6%).
+weight: 8.0
