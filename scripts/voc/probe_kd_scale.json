@@ -1,12 +1,4 @@
 {
-  "mse": {
-    "kd_loss": 5.260764835652519,
-    "task_loss": 4.553947925567627,
-    "kd_share": 0.5360080283183458,
-    "peak_vram_gb": 2.677734375,
-    "minutes": 9.888408362865448,
-    "config": "ultralytics/cfg/distill_head1_from_8s_coco.yaml"
-  },
   "pkd": {
     "kd_loss": 0.6475780269949909,
     "task_loss": 4.554051399230957,
@@ -22,5 +14,29 @@
     "peak_vram_gb": 2.587890625,
     "minutes": 10.232122965653737,
     "config": "ultralytics/cfg/distill_head1_from_8s_coco_mgd.yaml"
+  },
+  "mse": {
+    "kd_loss": 5.260764835652519,
+    "task_loss": 4.553947925567627,
+    "kd_share": 0.5360080283183458,
+    "peak_vram_gb": 2.677734375,
+    "minutes": 9.056438640753429,
+    "config": "ultralytics/cfg/distill_head1_from_8s_coco.yaml"
+  },
+  "fgd_w1p0": {
+    "kd_loss": 115.12441821996711,
+    "task_loss": 6.154263973236084,
+    "kd_share": 0.9492551876228996,
+    "peak_vram_gb": 2.908203125,
+    "minutes": 17.87104838291804,
+    "config": "ultralytics/cfg/distill_head1_from_8s_coco_fgd.yaml"
+  },
+  "fgd": {
+    "kd_loss": 117.52988632128428,
+    "task_loss": 4.852221488952637,
+    "kd_share": 0.9603518718890152,
+    "peak_vram_gb": 2.90234375,
+    "minutes": 10.411845417817434,
+    "config": "ultralytics/cfg/distill_head1_from_8s_coco_fgd.yaml"
   }
 }

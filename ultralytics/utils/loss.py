@@ -1410,12 +1410,17 @@ class FGDLoss(nn.Module):
             hmin = (boxes[:, 1] / img_h * H).floor().int()
             hmax = (boxes[:, 3] / img_h * H).ceil().int()
 
-            area = 1.0 / (hmax.view(1, -1) + 1 - hmin.view(1, -1)) / (wmax.view(1, -1) + 1 - wmin.view(1, -1))
+            area = 1.0 / (hmax + 1 - hmin) / (wmax + 1 - wmin)
 
-            for j in range(len(boxes)):
-                Mask_fg[i][hmin[j] : hmax[j] + 1, wmin[j] : wmax[j] + 1] = torch.maximum(
-                    Mask_fg[i][hmin[j] : hmax[j] + 1, wmin[j] : wmax[j] + 1], area[0][j]
-                )
+            # 레퍼런스는 박스마다 슬라이스에 maximum 을 쓰는 파이썬 루프인데, 배치당 245ms
+            # (100에폭에 7시간)라 브로드캐스트 max 로 벡터화했다. "박스 안이면 area, 밖이면 0"
+            # 의 박스별 최댓값이라는 정의는 그대로다 — 레퍼런스와 diff 0 을 테스트로 확인한다.
+            rows = torch.arange(H, device=boxes.device).unsqueeze(-1)  # (H, 1)
+            cols = torch.arange(W, device=boxes.device).unsqueeze(-1)  # (W, 1)
+            in_h = (rows >= hmin) & (rows <= hmax)  # (H, K) — 슬라이스 [hmin:hmax+1] 과 같은 포함 범위
+            in_w = (cols >= wmin) & (cols <= wmax)  # (W, K)
+            contrib = in_h.unsqueeze(1) & in_w.unsqueeze(0)  # (H, W, K)
+            Mask_fg[i] = (contrib * area).amax(dim=-1)
 
             Mask_bg[i] = torch.where(Mask_fg[i] > 0, 0, 1)
             if torch.sum(Mask_bg[i]):
