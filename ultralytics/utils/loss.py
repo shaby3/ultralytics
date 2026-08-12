@@ -1293,6 +1293,60 @@ class PKDLoss(nn.Module):
         return feat.reshape(c, n, h, w).permute(1, 0, 2, 3)
 
 
+class AMSELoss(nn.Module):
+    """Teacher-attention-weighted MSE feature distillation loss.
+
+    Not a published standalone method: this isolates one component of FGD (arXiv 2111.11837),
+    whose head-position run collapsed in this repo (README §4). FGD's focal term bundled three
+    things — GT fg/bg masks, teacher-attention weighting, and an attention-matching L1 — and this
+    loss keeps only the weighting, to test whether that part alone survives at the head position.
+
+    Weights come from the *teacher* feature only: spatial `H*W*softmax(mean_c|t|/T)` and channel
+    `C*softmax(mean_hw|t|/T)`, identical to FGD's parameter-free attention. Both average to
+    exactly 1 over their axes, so the weighted mean keeps the plain-MSE scale, stays inside this
+    repo's mean-reduction convention, and reduces to `F.mse_loss` when teacher attention is
+    uniform. Teacher-only weighting matters: weighting by student attention would let the student
+    shrink its own attention where it disagrees instead of closing the gap.
+
+    Takes a single tensor pair like PKDLoss — KDFeatureLoss loops over points and detaches the
+    teacher, and the trainer applies the KD weight.
+    """
+
+    def __init__(self, temp: float = 0.5):
+        """Initialize AMSELoss.
+
+        Args:
+            temp (float): Softmax temperature for both attentions. FGD paper default 0.5 —
+                lower is spikier weighting, higher approaches plain MSE.
+        """
+        super().__init__()
+        self.temp = temp
+
+    def forward(self, student_feat: torch.Tensor, teacher_feat: torch.Tensor) -> torch.Tensor:
+        """Compute teacher-attention-weighted MSE for one student/teacher feature pair.
+
+        Args:
+            student_feat (torch.Tensor): Aligned student feature, shape (N, C, H, W).
+            teacher_feat (torch.Tensor): Teacher feature, same shape (detached upstream).
+
+        Returns:
+            torch.Tensor: Scalar loss in fp32.
+        """
+        assert student_feat.shape == teacher_feat.shape, (
+            f"AMSE requires matching shapes, got {tuple(student_feat.shape)} vs {tuple(teacher_feat.shape)}. "
+            "The aligner should already match channels, and both hooks sit at the same stride."
+        )
+        # fp32 로 올린다 — PKDLoss 와 같은 이유 (autocast 안 fp16 입력에서 softmax·대면적 mean 재현성)
+        s, t = student_feat.float(), teacher_feat.float()
+        n, c, h, w = t.shape
+        value = t.abs()
+        # FGD 의 get_attention 과 동일한 정규화 — 두 가중치 모두 자기 축에서 평균이 정확히 1
+        w_s = (h * w * F.softmax((value.mean(dim=1, keepdim=True) / self.temp).view(n, -1), dim=1)).view(n, 1, h, w)
+        w_c = (c * F.softmax(value.mean(dim=(2, 3)) / self.temp, dim=1)).view(n, c, 1, 1)
+        # mean(w·(s−t)²) == mse(s·√w, t·√w) — 가중 평균 1 이라 attention 이 균등하면 일반 MSE 로 환원된다
+        return (w_s * w_c * (s - t) ** 2).mean()
+
+
 class KDFeatureLoss:
     """Feature-level Knowledge Distillation loss.
 

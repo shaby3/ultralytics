@@ -248,12 +248,12 @@ def create_distiller(trainer_cls):
 
         def _setup_kd_loss(self):
             """Initialize KD feature loss function."""
-            from ultralytics.utils.loss import KDFeatureLoss, PKDLoss
+            from ultralytics.utils.loss import AMSELoss, KDFeatureLoss, PKDLoss
 
             loss_name = self.distill_cfg.get("loss", "mse")
             # reduction 은 전부 mean 으로 통일한다. 참조 구현들이 쓰는 sum/N + 고유 alpha 관례를 섞으면
             # 정규화 체계가 둘이 되어, 위치별로 실측해 맞춘 기존 weight 기준과 비교가 끊긴다 (README §4).
-            loss_map = {"mse": nn.MSELoss(reduction="mean"), "pkd": PKDLoss()}
+            loss_map = {"mse": nn.MSELoss(reduction="mean"), "pkd": PKDLoss(), "amse": AMSELoss()}
             # 미등록 이름을 조용히 넘기면 KDFeatureLoss 의 `loss_fn or MSELoss()` 가 MSE 로 되돌려서,
             # 오타 하나로 13시간을 MSE 로 돌고 결과를 다른 기법으로 착각하게 된다. aligner 쪽과 같이 막는다.
             if loss_name not in loss_map:
