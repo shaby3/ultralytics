@@ -1293,6 +1293,264 @@ class PKDLoss(nn.Module):
         return feat.reshape(c, n, h, w).permute(1, 0, 2, 3)
 
 
+class FGDLoss(nn.Module):
+    """Focal and Global Distillation loss for one distillation point (FGD, https://arxiv.org/abs/2111.11837).
+
+    Port of the reference `FeatureLoss` (https://github.com/yzd-v/FGD, mmdet/distillation/losses/fgd.py)
+    with the mmcv dependencies replaced by equivalent torch.nn.init calls. The math — attention,
+    masks, all four terms and their sum-based reductions — is kept verbatim, including the paper
+    default term weights, because converting the four heterogeneous reductions to `mean` would
+    distort the inter-term balance the paper tuned. Only the *total* is rescaled, by the trainer's
+    probe-normalized KD weight (README §4).
+
+    Focal part: GT boxes projected onto the feature map build foreground/background masks, and the
+    teacher's (parameter-free) spatial/channel attention weights both features before separate
+    fg/bg MSE terms plus an L1 term between the attention maps themselves.
+    Global part: a GcBlock per side (conv_mask -> softmax pooling -> Conv-LN-ReLU-Conv) adds global
+    context before a final MSE — these carry learnable parameters, on the teacher side too
+    (gradients flow to the parameters even though teacher features are detached).
+    """
+
+    def __init__(
+        self,
+        student_channels: int,
+        teacher_channels: int,
+        temp: float = 0.5,
+        alpha_fgd: float = 0.001,
+        beta_fgd: float = 0.0005,
+        gamma_fgd: float = 0.001,
+        lambda_fgd: float = 0.000005,
+    ):
+        """Initialize FGDLoss for a single distillation point.
+
+        Args:
+            student_channels (int): Channels of the student feature map.
+            teacher_channels (int): Channels of the teacher feature map.
+            temp (float): Temperature for the attention softmaxes.
+            alpha_fgd (float): Weight of the foreground loss.
+            beta_fgd (float): Weight of the background loss.
+            gamma_fgd (float): Weight of the attention mask loss.
+            lambda_fgd (float): Weight of the global relation loss.
+        """
+        super().__init__()
+        self.temp = temp
+        self.alpha_fgd = alpha_fgd
+        self.beta_fgd = beta_fgd
+        self.gamma_fgd = gamma_fgd
+        self.lambda_fgd = lambda_fgd
+
+        # 레퍼런스와 동일: 채널이 다를 때만 1x1 투영. 그래서 aligner 슬롯은 IdentityAligner 로 통과시킨다.
+        self.align = (
+            nn.Conv2d(student_channels, teacher_channels, kernel_size=1)
+            if student_channels != teacher_channels
+            else None
+        )
+        self.conv_mask_s = nn.Conv2d(teacher_channels, 1, kernel_size=1)
+        self.conv_mask_t = nn.Conv2d(teacher_channels, 1, kernel_size=1)
+        self.channel_add_conv_s = nn.Sequential(
+            nn.Conv2d(teacher_channels, teacher_channels // 2, kernel_size=1),
+            nn.LayerNorm([teacher_channels // 2, 1, 1]),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(teacher_channels // 2, teacher_channels, kernel_size=1),
+        )
+        self.channel_add_conv_t = nn.Sequential(
+            nn.Conv2d(teacher_channels, teacher_channels // 2, kernel_size=1),
+            nn.LayerNorm([teacher_channels // 2, 1, 1]),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(teacher_channels // 2, teacher_channels, kernel_size=1),
+        )
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        """Reference init without mmcv: kaiming fan_in on conv_mask, zero-init on the last GcBlock conv."""
+        for m in (self.conv_mask_s, self.conv_mask_t):
+            nn.init.kaiming_normal_(m.weight, mode="fan_in", nonlinearity="relu")
+            nn.init.zeros_(m.bias)
+        # GcBlock 의 마지막 conv 를 0 으로 두면 학습 초기에 global 항이 순수 MSE 에서 출발한다 (레퍼런스 last_zero_init)
+        for seq in (self.channel_add_conv_s, self.channel_add_conv_t):
+            nn.init.zeros_(seq[-1].weight)
+            nn.init.zeros_(seq[-1].bias)
+
+    def forward(
+        self, preds_S: torch.Tensor, preds_T: torch.Tensor, gt_bboxes: list[torch.Tensor], img_hw: tuple[int, int]
+    ) -> torch.Tensor:
+        """Compute the FGD loss for one student/teacher feature pair.
+
+        Args:
+            preds_S (torch.Tensor): Student feature map (N, C_s, H, W), fp32.
+            preds_T (torch.Tensor): Teacher feature map (N, C_t, H, W), fp32, already detached.
+            gt_bboxes (list[torch.Tensor]): Per-image GT boxes in pixel xyxy, one (n_i, 4) tensor per image.
+            img_hw (tuple[int, int]): Input image (height, width) the boxes are expressed in.
+
+        Returns:
+            torch.Tensor: Scalar loss `alpha*fg + beta*bg + gamma*mask + lambda*rela`.
+        """
+        assert preds_S.shape[-2:] == preds_T.shape[-2:], "student and teacher spatial dims differ"
+
+        if self.align is not None:
+            preds_S = self.align(preds_S)
+
+        N, C, H, W = preds_S.shape
+        img_h, img_w = img_hw
+
+        S_attention_t, C_attention_t = self.get_attention(preds_T, self.temp)
+        S_attention_s, C_attention_s = self.get_attention(preds_S, self.temp)
+
+        Mask_fg = torch.zeros_like(S_attention_t)
+        Mask_bg = torch.ones_like(S_attention_t)
+        for i in range(N):
+            boxes = gt_bboxes[i]
+            if len(boxes) == 0:
+                # 빈 GT 이미지: fg 0, bg 균일 정규화. 레퍼런스 루프도 자연히 같은 결과가 되지만 명시한다 (mosaic 경계 케이스)
+                Mask_bg[i] /= Mask_bg[i].sum()
+                continue
+            # GT 를 feature 좌표로: 레퍼런스의 img_metas[i]['img_shape'] 나눗셈과 같은 식
+            wmin = (boxes[:, 0] / img_w * W).floor().int()
+            wmax = (boxes[:, 2] / img_w * W).ceil().int()
+            hmin = (boxes[:, 1] / img_h * H).floor().int()
+            hmax = (boxes[:, 3] / img_h * H).ceil().int()
+
+            area = 1.0 / (hmax.view(1, -1) + 1 - hmin.view(1, -1)) / (wmax.view(1, -1) + 1 - wmin.view(1, -1))
+
+            for j in range(len(boxes)):
+                Mask_fg[i][hmin[j] : hmax[j] + 1, wmin[j] : wmax[j] + 1] = torch.maximum(
+                    Mask_fg[i][hmin[j] : hmax[j] + 1, wmin[j] : wmax[j] + 1], area[0][j]
+                )
+
+            Mask_bg[i] = torch.where(Mask_fg[i] > 0, 0, 1)
+            if torch.sum(Mask_bg[i]):
+                Mask_bg[i] /= torch.sum(Mask_bg[i])
+
+        fg_loss, bg_loss = self.get_fea_loss(
+            preds_S, preds_T, Mask_fg, Mask_bg, C_attention_s, C_attention_t, S_attention_s, S_attention_t
+        )
+        mask_loss = self.get_mask_loss(C_attention_s, C_attention_t, S_attention_s, S_attention_t)
+        rela_loss = self.get_rela_loss(preds_S, preds_T)
+
+        return (
+            self.alpha_fgd * fg_loss
+            + self.beta_fgd * bg_loss
+            + self.gamma_fgd * mask_loss
+            + self.lambda_fgd * rela_loss
+        )
+
+    @staticmethod
+    def get_attention(preds: torch.Tensor, temp: float) -> tuple[torch.Tensor, torch.Tensor]:
+        """Parameter-free spatial (N, H, W) and channel (N, C) attention from mean absolute activation."""
+        N, C, H, W = preds.shape
+        value = torch.abs(preds)
+        fea_map = value.mean(axis=1, keepdim=True)
+        S_attention = (H * W * F.softmax((fea_map / temp).view(N, -1), dim=1)).view(N, H, W)
+        channel_map = value.mean(axis=2, keepdim=False).mean(axis=2, keepdim=False)
+        C_attention = C * F.softmax(channel_map / temp, dim=1)
+        return S_attention, C_attention
+
+    @staticmethod
+    def get_fea_loss(preds_S, preds_T, Mask_fg, Mask_bg, C_s, C_t, S_s, S_t):
+        """Foreground/background MSE, both features weighted by the *teacher's* attention only."""
+        loss_mse = nn.MSELoss(reduction="sum")
+
+        Mask_fg = Mask_fg.unsqueeze(dim=1)
+        Mask_bg = Mask_bg.unsqueeze(dim=1)
+        C_t = C_t.unsqueeze(dim=-1).unsqueeze(dim=-1)
+        S_t = S_t.unsqueeze(dim=1)
+
+        fea_t = torch.mul(preds_T, torch.sqrt(S_t))
+        fea_t = torch.mul(fea_t, torch.sqrt(C_t))
+        fg_fea_t = torch.mul(fea_t, torch.sqrt(Mask_fg))
+        bg_fea_t = torch.mul(fea_t, torch.sqrt(Mask_bg))
+
+        fea_s = torch.mul(preds_S, torch.sqrt(S_t))
+        fea_s = torch.mul(fea_s, torch.sqrt(C_t))
+        fg_fea_s = torch.mul(fea_s, torch.sqrt(Mask_fg))
+        bg_fea_s = torch.mul(fea_s, torch.sqrt(Mask_bg))
+
+        fg_loss = loss_mse(fg_fea_s, fg_fea_t) / len(Mask_fg)
+        bg_loss = loss_mse(bg_fea_s, bg_fea_t) / len(Mask_bg)
+        return fg_loss, bg_loss
+
+    @staticmethod
+    def get_mask_loss(C_s, C_t, S_s, S_t):
+        """L1 distance between student and teacher attention maps."""
+        return torch.sum(torch.abs(C_s - C_t)) / len(C_s) + torch.sum(torch.abs(S_s - S_t)) / len(S_s)
+
+    def spatial_pool(self, x: torch.Tensor, in_type: int) -> torch.Tensor:
+        """GcBlock context modeling: softmax-pooled (N, C, 1, 1) context. in_type 0 = student, 1 = teacher."""
+        batch, channel, width, height = x.size()
+        input_x = x.view(batch, channel, height * width).unsqueeze(1)
+        context_mask = self.conv_mask_s(x) if in_type == 0 else self.conv_mask_t(x)
+        context_mask = F.softmax(context_mask.view(batch, 1, height * width), dim=2).unsqueeze(-1)
+        context = torch.matmul(input_x, context_mask)
+        return context.view(batch, channel, 1, 1)
+
+    def get_rela_loss(self, preds_S: torch.Tensor, preds_T: torch.Tensor) -> torch.Tensor:
+        """Global relation MSE after each side adds its own GcBlock context."""
+        loss_mse = nn.MSELoss(reduction="sum")
+        context_s = self.spatial_pool(preds_S, 0)
+        context_t = self.spatial_pool(preds_T, 1)
+        out_s = preds_S + self.channel_add_conv_s(context_s)
+        out_t = preds_T + self.channel_add_conv_t(context_t)
+        return loss_mse(out_s, out_t) / len(out_s)
+
+
+class FGDFeatureLoss(nn.Module):
+    """Multi-point container for FGDLoss — the FGD counterpart of KDFeatureLoss.
+
+    Unlike KDFeatureLoss this is a real nn.Module: FGD carries learnable parameters (per-point
+    align conv and two GcBlocks), so the distiller must register this module on the
+    DistillationWrapper for the optimizer and EMA to pick the parameters up — an unregistered
+    stateful loss trains silently frozen. It also needs the batch for GT boxes, which the
+    trainer passes through the shared `batch=` keyword.
+    """
+
+    def __init__(self, student_channels: list[int], teacher_channels: list[int], **loss_args):
+        """Initialize one FGDLoss per distillation point.
+
+        Args:
+            student_channels (list[int]): Channel counts per student distillation point.
+            teacher_channels (list[int]): Channel counts per teacher distillation point.
+            **loss_args: Forwarded to every FGDLoss (temp, alpha_fgd, beta_fgd, gamma_fgd, lambda_fgd).
+        """
+        super().__init__()
+        assert len(student_channels) == len(teacher_channels), (
+            f"student ({len(student_channels)}) and teacher ({len(teacher_channels)}) channel lists must have equal length"
+        )
+        self.losses = nn.ModuleList(
+            [FGDLoss(sc, tc, **loss_args) for sc, tc in zip(student_channels, teacher_channels)]
+        )
+
+    def forward(self, student_feats, teacher_feats, batch=None):
+        """Compute mean FGD loss across all distillation points.
+
+        Args:
+            student_feats (list[torch.Tensor]): Student feature maps (through IdentityAligner, i.e. raw).
+            teacher_feats (list[torch.Tensor]): Teacher feature maps (will be detached).
+            batch (dict): Training batch; needs "img", "bboxes" (normalized xywh), "batch_idx".
+
+        Returns:
+            torch.Tensor: Scalar loss value.
+        """
+        assert batch is not None, "FGD needs the training batch for GT boxes"
+        img_h, img_w = batch["img"].shape[-2:]
+        device = student_feats[0].device
+        # 정규화 xywh -> 픽셀 xyxy 로 1회 변환 후 이미지별로 쪼갠다 — 레퍼런스가 받는 형태와 동일
+        boxes = xywh2xyxy(batch["bboxes"].to(device)) * torch.tensor(
+            [img_w, img_h, img_w, img_h], device=device
+        )
+        batch_idx = batch["batch_idx"].to(device).view(-1)
+        gt_bboxes = [boxes[batch_idx == i] for i in range(batch["img"].shape[0])]
+
+        # fp32 로 계산한다 — KD forward 가 autocast 안이라 feature 가 fp16 으로 들어오는데, FGD 는
+        # 내부에 conv 가 있어 PKD 처럼 .float() 만으로는 안 되고 (autocast 가 conv 를 도로 fp16 으로
+        # 내림) 영역 자체를 꺼야 한다. softmax(T=0.5)·LayerNorm·sum reduction 전부 fp32 로 돈다.
+        with torch.autocast(device_type=device.type, enabled=False):
+            loss = sum(
+                fgd(sf.float(), tf.detach().float(), gt_bboxes, (img_h, img_w))
+                for fgd, sf, tf in zip(self.losses, student_feats, teacher_feats)
+            )
+        return loss / len(self.losses)
+
+
 class KDFeatureLoss:
     """Feature-level Knowledge Distillation loss.
 
@@ -1308,12 +1566,14 @@ class KDFeatureLoss:
         """
         self.loss_fn = loss_fn or nn.MSELoss(reduction="mean")
 
-    def __call__(self, student_feats, teacher_feats):
+    def __call__(self, student_feats, teacher_feats, batch=None):
         """Compute mean feature distillation loss across all distillation points.
 
         Args:
             student_feats (list[torch.Tensor]): Aligned student feature maps.
             teacher_feats (list[torch.Tensor]): Teacher feature maps (will be detached).
+            batch (dict, optional): Ignored. Accepted so the trainer can call every KD loss with the
+                same signature — FGDFeatureLoss actually consumes it for GT boxes.
 
         Returns:
             torch.Tensor: Scalar loss value.
