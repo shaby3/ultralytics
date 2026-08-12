@@ -10,7 +10,9 @@
 # - attention 은 teacher 로만 계산한다 — student attention 을 가중치에 넣으면 안 맞는 곳의
 #   자기 attention 을 줄이는 우회가 생긴다. teacher 는 detach 라 가중치가 상수다.
 # - ③(γ항)은 넣지 않는다 — 넣는 순간 "가중만 분리한" 실험이 아니게 된다.
-# - temp 는 FGD 논문 기본값 0.5 고정 (AMSELoss 의 기본 인자, ultralytics/utils/loss.py).
+# - temp 는 1.0 (distiller.py 의 loss_map 에서 지정). FGD 논문 기본값 0.5 는 head feature 에서
+#   채널 가중이 one-hot 으로 퇴화해서(README §4 실측) 완화했다 — FGD 정의에서 한 발 더 벗어난
+#   변형이라는 뜻이기도 하다.
 #
 # 가중치는 공간·채널 각 축에서 평균이 정확히 1이라 mean reduction 관례 안에 있고, attention 이
 # 균등하면 일반 MSE 로 환원된다. 실제 teacher feature 실측에서도 MSE 대비 0.95~1.07배였다.
@@ -37,10 +39,10 @@ student:
 
 aligner: ConvBNSiLUAligner # MSE 런과 동일하게 고정 — 가중 방식 하나만 갈린다
 loss: amse
-# 프로브 실측: kd_loss 원값이 MSE 의 15배(79.7)다 — 수식상 가중 평균은 1이지만, 학습 초기
-# student 오차가 teacher attention 위치에 몰려 있어(오차-attention 상관) 실효 배율이 크다.
-# w=1.0 프로브(amse_w1p0)는 KD 비중 93% 로 task 가 오염되어 FGD 때처럼 두 번 쟀다 —
-# 보정 추정치 0.067 재프로브에서 1.1552 x 4.7418 / 79.679 = 0.0687 (초기 KD 비중 54.0%).
-# 채택값 0.1 은 산출값의 1.46배 (사용자 결정) — 초기 KD 비중 62.7% 로 MSE(53.6%)보다 9pt 높다.
-# 해석 주의: MSE 대비 결과에 "가중 방식" 효과와 "KD 강도 +46%" 효과가 섞인다.
+# 프로브 실측 (T=0.5 기준): kd_loss 원값이 MSE 의 15배(79.7)다 — 수식상 가중 평균은 1이지만,
+# 학습 초기 student 오차가 teacher attention 위치에 몰려 있어(오차-attention 상관) 실효 배율이 크다.
+# w=1.0 프로브(amse_w1p0)는 KD 비중 93% 로 task 가 오염되어 FGD 때처럼 두 번 쟀고, 공식 산출은
+# 0.0687 이었다. 채택값 0.1 과 T=1.0 완화는 모두 사용자 결정이며 **T=1 에서 재프로브하지 않았다** —
+# T 가 낮아지면 가중이 부드러워져 kd_loss 원값이 15배보다 내려가므로, 실효 KD 비중은 ep1 의
+# 가중 kd_loss 로그(= 0.1 x 원값)로 확인한다.
 weight: 0.1
