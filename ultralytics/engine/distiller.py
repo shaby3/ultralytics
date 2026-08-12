@@ -45,25 +45,18 @@ class _FeatureHook:
 
 
 class DistillationWrapper(nn.Module):
-    """Wraps student model + aligner (+ stateful KD loss) into a single nn.Module for unified optimizer traversal."""
+    """Wraps student model + aligner into a single nn.Module for unified optimizer traversal."""
 
-    def __init__(self, student, aligner, kd_loss=None):
+    def __init__(self, student, aligner):
         """Initialize DistillationWrapper.
 
         Args:
             student (nn.Module): Student model.
             aligner (nn.Module): Multi-scale feature aligner.
-            kd_loss (nn.Module, optional): Stateful KD loss (e.g. FGDFeatureLoss). Registering it here
-                puts its learnable parameters (FGD's GcBlocks and align convs) on the same optimizer/EMA
-                path as the aligner — left outside the wrapper they would train silently frozen.
-                Stateless losses (mse/pkd) stay outside; this is None for them.
         """
         super().__init__()
         self.student = student
         self.aligner = aligner
-        # aligner 와 마찬가지로 wrapper.forward 밖에서 직접 호출된다 — DDP 에서 grad sync 가 보장되지
-        # 않는 기존 한계를 공유한다 (find_unused_parameters=True, 단일 GPU 환경이라 실해 없음).
-        self.kd_loss = kd_loss
 
     def __getattr__(self, name):
         """Delegate attribute access to student for unknown attributes."""
@@ -253,38 +246,18 @@ def create_distiller(trainer_cls):
                 "Size",
             )
 
-        def _setup_kd_loss(self, student_channels, teacher_channels):
-            """Initialize KD feature loss function.
-
-            Channel lists are needed by stateful losses that build per-point modules (FGD).
-            Must be called before the model is wrapped, so a stateful loss can be registered on
-            the DistillationWrapper for optimizer/EMA traversal.
-            """
-            from ultralytics.utils.loss import FGDFeatureLoss, KDFeatureLoss, PKDLoss
+        def _setup_kd_loss(self):
+            """Initialize KD feature loss function."""
+            from ultralytics.utils.loss import KDFeatureLoss, PKDLoss
 
             loss_name = self.distill_cfg.get("loss", "mse")
-            loss_args = self.distill_cfg.get("loss_args") or {}
-
-            # FGD 는 KDFeatureLoss 를 거치지 않는 유상태 loss 다 — 지점별 학습 파라미터(GcBlock 2벌,
-            # 채널이 다른 지점의 align conv)를 갖고, GT box 가 필요해서 batch 를 직접 받는다.
-            if loss_name == "fgd":
-                if loss_args:
-                    LOGGER.info(f"Loss args: {loss_args}")
-                self.kd_loss_fn = FGDFeatureLoss(student_channels, teacher_channels, **loss_args).to(self.device)
-                return
-            # 무상태 loss 에 loss_args 가 오면 조용히 무시하지 않고 막는다 — MSE 폴백 함정과 같은 부류.
-            if loss_args:
-                raise ValueError(f"loss_args is only supported for stateful losses ('fgd'), not '{loss_name}'.")
-
             # reduction 은 전부 mean 으로 통일한다. 참조 구현들이 쓰는 sum/N + 고유 alpha 관례를 섞으면
             # 정규화 체계가 둘이 되어, 위치별로 실측해 맞춘 기존 weight 기준과 비교가 끊긴다 (README §4).
-            # 예외는 fgd — 4항의 이질적 reduction 을 mean 으로 바꾸면 논문이 튜닝한 항간 비율이 뒤틀려서,
-            # 내부는 레퍼런스 그대로 두고 총량만 프로브 weight 로 맞춘다.
             loss_map = {"mse": nn.MSELoss(reduction="mean"), "pkd": PKDLoss()}
             # 미등록 이름을 조용히 넘기면 KDFeatureLoss 의 `loss_fn or MSELoss()` 가 MSE 로 되돌려서,
             # 오타 하나로 13시간을 MSE 로 돌고 결과를 다른 기법으로 착각하게 된다. aligner 쪽과 같이 막는다.
             if loss_name not in loss_map:
-                raise ValueError(f"Unknown KD loss '{loss_name}'. Available losses: {sorted(loss_map) + ['fgd']}")
+                raise ValueError(f"Unknown KD loss '{loss_name}'. Available losses: {sorted(loss_map)}")
             self.kd_loss_fn = KDFeatureLoss(loss_fn=loss_map[loss_name])
 
         # --- Training setup override ---
@@ -322,14 +295,11 @@ def create_distiller(trainer_cls):
             # 6. Create aligner
             self._setup_aligner(student_channels, teacher_channels)
 
-            # 7. KD loss — wrap 전에 만든다. 유상태 loss(fgd)는 wrapper 에 실려야 아래 9번의
-            # 옵티마이저 빌드(_build_train_pipeline → build_optimizer(model=self.model))와 EMA 가
-            # 파라미터를 잡는다. aligner 가 학습되는 것과 같은 경로다.
-            self._setup_kd_loss(student_channels, teacher_channels)
+            # 7. Wrap student + aligner
+            self.model = DistillationWrapper(self.model, self.aligner_module)
 
-            # 8. Wrap student + aligner (+ stateful KD loss)
-            kd_loss_module = self.kd_loss_fn if isinstance(self.kd_loss_fn, nn.Module) else None
-            self.model = DistillationWrapper(self.model, self.aligner_module, kd_loss_module)
+            # 8. KD loss
+            self._setup_kd_loss()
 
             # 9. Remaining base setup: compile, freeze, AMP, DDP, batch, optimizer, EMA, etc.
             self.model = attempt_compile(self.model, device=self.device, mode=self.args.compile)
@@ -499,10 +469,9 @@ def create_distiller(trainer_cls):
                             else:
                                 loss, self.loss_items = self.model(batch)
 
-                            # Align student features and compute KD loss.
-                            # batch 는 GT 가 필요한 loss(fgd)만 소비하고 나머지는 무시한다.
+                            # Align student features and compute KD loss
                             aligned_feats = unwrap_model(self.model).aligner(self._student_feats)
-                            kd_loss = self.kd_loss_fn(aligned_feats, self._teacher_feats, batch=batch)
+                            kd_loss = self.kd_loss_fn(aligned_feats, self._teacher_feats)
                             self.loss = loss.sum() + self.kd_weight * kd_loss * batch["img"].shape[0]
 
                             if RANK != -1:
@@ -511,7 +480,7 @@ def create_distiller(trainer_cls):
                                 self.loss_items if self.tloss is None else (self.tloss * i + self.loss_items) / (i + 1)
                             )
                             # weight 를 곱한 값을 기록한다 — 로그의 kd_loss 가 task loss 와 같은 스케일이라야
-                            # KD 비중을 눈으로 읽을 수 있다 (FGD 는 원값이 세 자릿수라 특히 그렇다).
+                            # KD 비중을 눈으로 읽을 수 있다 (원값은 기법마다 자릿수가 다르다: pkd 0.6 vs mse 5).
                             # 원값이 필요한 곳(프로브)은 config 의 weight 로 되나눈다. README §4.
                             kd_val = kd_loss.detach().item() * self.kd_weight
                             self.tkd_loss = kd_val if self.tkd_loss is None else (self.tkd_loss * i + kd_val) / (i + 1)
@@ -663,11 +632,9 @@ def create_distiller(trainer_cls):
                     module._forward_hooks.clear()
                 student_ema = deepcopy(ema_model.student).half()
                 aligner_ema = deepcopy(ema_model.aligner).half()
-                kd_loss_ema = deepcopy(ema_model.kd_loss).half() if isinstance(ema_model.kd_loss, nn.Module) else None
             else:
                 student_ema = deepcopy(ema_model).half()
                 aligner_ema = None
-                kd_loss_ema = None
 
             # Save standard YOLO checkpoint (student only)
             buffer = io.BytesIO()
@@ -708,9 +675,6 @@ def create_distiller(trainer_cls):
             # Save aligner separately
             if aligner_ema is not None:
                 torch.save({"aligner": aligner_ema, "epoch": self.epoch}, self.wdir / "aligner_last.pt")
-            # 유상태 KD loss(fgd)도 같은 방식으로 — resume 시 미복원인 것은 aligner 와 동일한 기존 한계
-            if kd_loss_ema is not None:
-                torch.save({"kd_loss": kd_loss_ema, "epoch": self.epoch}, self.wdir / "kd_loss_last.pt")
 
     Distiller.__name__ = "Distiller"
     Distiller.__qualname__ = "Distiller"

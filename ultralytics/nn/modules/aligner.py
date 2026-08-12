@@ -128,24 +128,6 @@ class MGDAligner(nn.Module):
         return self.generation(x)
 
 
-class IdentityAligner(nn.Module):
-    """Pass-through aligner for losses that align channels internally (currently FGD).
-
-    FGD's reference implementation owns its 1x1 projection (created only when channel counts
-    differ), so the aligner slot must not add another one — porting the reference wholesale is
-    the point (same reasoning as MGDAligner). Combining this with a loss that expects aligned
-    channels fails immediately on a shape assert, so there is no silent-misuse path.
-    """
-
-    def __init__(self, in_channels, out_channels):
-        """Initialize IdentityAligner. Both channel arguments are accepted for signature compatibility and ignored."""
-        super().__init__()
-
-    def forward(self, x):
-        """Return the input unchanged."""
-        return x
-
-
 class MultiScaleAligner(nn.Module):
     """Manages per-distillation-point ConvAligners via ModuleList."""
 

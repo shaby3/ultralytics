@@ -63,7 +63,7 @@ Q2 결론에 교락으로 남아 있다. **teacher 크기는 최후순위 부록
 | 4 | head`.0` × s-COCO | 증류 위치 | 완료 0.6484 ← Q2 확정 |
 | 5 | head`.1` × s-COCO × **PKD** | KD 기법 | 완료 **0.6533** ← 기법 선두 |
 | 6 | head`.1` × s-COCO × **MGD** | KD 기법 | 완료 0.6501 (≈MSE) |
-| 7 | head`.1` × s-COCO × **FGD** | KD 기법 | 대기 |
+| 7 | head`.1` × s-COCO × **FGD** | KD 기법 | **중단** — ep2 에서 폐기 ([§4](#fgd-는-시도-후-중단했다)) |
 | — | head`.1` × **m**-COCO | teacher 크기 | 최후순위 |
 
 1~4 번이 Q1·Q2 를 닫았고, 2번 런이 세 질문의 공통 기준점 역할을 한다 — Q1 의 대조쌍이자,
@@ -71,13 +71,12 @@ Q2 결론에 교락으로 남아 있다. **teacher 크기는 최후순위 부록
 
 ### 각 phase 가 허용하는 주장의 범위
 
-**기법 축(Phase 3)은 head`.1`·s-COCO 위에서만 확인한다.** 네 수준 모두 위치·teacher·epochs·batch 가
-같고 loss 또는 aligner 만 다르다. 다만 **MGD 와 FGD 는 한 축만 다른 비교가 아니다** —
-MGD 는 정렬부·마스킹·생성 블록 셋이 함께 바뀌고 증류 경로 파라미터가 11.3배가 된다.
-FGD 는 정렬부·attention 가중·GcBlock 이 함께 바뀌는 데다, 넥 전용으로 검증된 기법을 head 에 쓰는
-**off-label** 적용이고, GT box 를 쓰는 유일한 수준이라 입력 정보량 자체가 다르다.
-둘 다 방법의 정의라 피할 수 없고, MGD 가 이기면 λ=0 런으로 마스킹 순효과를 가른다
+**기법 축(Phase 3)은 head`.1`·s-COCO 위에서만 확인한다.** 세 수준(MSE·PKD·MGD) 모두
+위치·teacher·epochs·batch 가 같고 loss 또는 aligner 만 다르다. 다만 **MGD 는 한 축만 다른 비교가
+아니다** — 정렬부·마스킹·생성 블록 셋이 함께 바뀌고 증류 경로 파라미터가 11.3배가 된다.
+방법의 정의라 피할 수 없고, MGD 가 이기면 λ=0 런으로 마스킹 순효과를 가른다
 ([§4](#phase-3--kd-기법-loss-와-aligner)). MGD 는 MSE 와 동률(+0.05pt)로 끝나 λ=0 런은 켜지지 않았다.
+4번째 수준으로 시도한 FGD 는 본 런 초반에 중단하고 폐기했다 ([§4](#fgd-는-시도-후-중단했다)).
 
 **Q3(teacher 크기)은 미뤘지만 비교 대상은 이미 확정됐다** — Phase 2 가 COCO 로 이겼으므로
 **s-COCO(0.6496)** 와 한 축만 다른 비교가 되고, 그 런은 손에 있다.
@@ -303,14 +302,14 @@ Phase 3 은 승자 위치의 config·스크립트를 복사해 `teacher.model` �
 
 ### Phase 3 — KD 기법 (loss 와 aligner)
 
-위치·teacher 가 닫힌 뒤의 축이다. **head`.1` · s-COCO · 100에폭 · batch 16 고정** 위에서 4수준을 비교한다.
+위치·teacher 가 닫힌 뒤의 축이다. **head`.1` · s-COCO · 100에폭 · batch 16 고정** 위에서 3수준을 비교한다.
+(4번째로 시도한 FGD 는 중단 — [아래](#fgd-는-시도-후-중단했다).)
 
 | 수준 | 무엇이 바뀌나 | config | weight | 상태 |
 |---|---|---|:---:|:---:|
 | **MSE** (기준) | — | `distill_head1_from_8s_coco.yaml` | 1.0 | 완료 0.6496 |
 | **PKD** | loss 만 | `..._coco_pkd.yaml` | **8.0** | 완료 **0.6533** |
 | **MGD** | aligner 만 (loss 는 mse 그대로) | `..._coco_mgd.yaml` | **1.4** | 완료 0.6501 |
-| **FGD** | loss + aligner (아래 단서) | `..._coco_fgd.yaml` | **0.05** | 대기 |
 
 **PKD** ([arXiv 2207.02039](https://arxiv.org/abs/2207.02039)) — feature 를 채널별로 평균 0·분산 1 로
 표준화한 뒤 MSE. 수학적으로 `1 − r`(Pearson 상관)과 같다. `E[(x−y)²] = 1 − 2r + 1 = 2(1−r)` 이라 2로 나눈다.
@@ -328,29 +327,26 @@ head`.1` 6지점에서는 box(64→64)에 투영이 없고 cls(64→128)에만 �
 `mean` 으로 두고, `alpha_mgd` 대신 이 저장소의 `weight` 를 쓴다. 둘을 섞으면 정규화 체계가 둘이 되어
 지금까지 위치별로 실측해 맞춘 weight 기준과 비교가 끊긴다.
 
-**FGD** ([arXiv 2111.11837](https://arxiv.org/abs/2111.11837), CVPR 2022) — Focal + Global 두 부분의 합이다.
-**Focal**: GT box 를 feature 에 투영해 전경/배경 마스크를 만들고, teacher 의 spatial·channel attention
-(파라미터 없음 — 평균 절대값의 softmax)을 가중치로 전경과 배경을 **분리해서** MSE 를 건다
-(`α·fg + β·bg`) + 두 attention 맵을 맞추는 L1(`γ·mask`). **Global**: GcBlock(`conv_mask` 1×1 →
-softmax pooling → Conv-LN-ReLU-Conv)이 각자의 전역 문맥을 더한 뒤 MSE(`λ·rela`). GcBlock 은
-student·teacher 각 1벌씩 **학습 파라미터**고, teacher 측도 학습된다 (입력이 detach 돼도 파라미터에는
-grad 가 흐른다).
+#### FGD 는 시도 후 중단했다
 
-FGD 는 기존 두 슬롯 어디에도 안 맞아서 세 번째 구조가 필요했다. loss 에 학습 파라미터가 있는데
-기존 loss 슬롯은 무상태 전제고, aligner 슬롯은 GT 와 teacher feature 를 못 받는다. 해법은
-`DistillationWrapper` 에 유상태 loss 를 등록하는 것 — 옵티마이저가 wrapper 전체를 순회해 만들어지므로
-(`_build_train_pipeline` → `build_optimizer(model=self.model)`) **aligner 가 학습되는 것과 같은 경로**로
-GcBlock 이 학습된다. GT 는 KD loss 호출에 `batch=` 로 통과시킨다 (무상태 loss 는 무시).
+**FGD** ([arXiv 2111.11837](https://arxiv.org/abs/2111.11837), CVPR 2022)를 4번째 수준으로 이식해
+(레퍼런스 [yzd-v/FGD](https://github.com/yzd-v/FGD) 와 diff 0, 프로브로 weight 0.05 산출) 본 런까지
+착수했지만, **ep2 에서 중단하고 폐기했다.**
 
-구현은 레퍼런스([yzd-v/FGD](https://github.com/yzd-v/FGD) `fgd.py`)를 mmcv 의존만 제거하고 그대로
-포팅했다 — 동일 가중치·입력에서 diff 0 을 확인했다. **내부 4항의 sum 기반 reduction 과 논문 기본값
-(α=1e-3, β=5e-4, γ=1e-3, λ=5e-6)도 그대로 둔다.** 이는 "reduction 전부 mean" 관례의 의도적 예외다 —
-이질적인 4항을 mean 으로 바꾸면 논문이 튜닝한 항간 비율이 근거 없이 뒤틀린다.
-항간 비율은 논문값을 보존하고, **총량 스케일만 프로브 weight 로** 기존 기준에 맞춘다.
-aligner 는 `IdentityAligner`(통과)다 — FGD 가 채널이 다를 때만 내부 1×1 투영을 만들기 때문에
-슬롯에서 또 정렬하면 FGD 가 아니게 된다.
+- **중단 근거**: ep1/ep2 mAP50-95 가 0.285/0.177 로, 역대 8개 런의 초반 밴드(ep1 0.39~0.45,
+  ep2 0.27~0.39) 밖으로 떨어졌다. task loss 도 +7.5% 높았다. KD 비중은 50.6% 로 MSE(54%)와 같은
+  수준이었으므로 weight 문제가 아니라 **신호의 성격이 task 와 충돌**한 것이다.
+- **해석**: 예고된 off-label 리스크의 현실화다. FGD 는 GT 박스의 축정렬 사각형 전체를 전경으로 밀고
+  teacher 의 attention 분포까지 강제하는데, 이는 넥의 공간 feature 용으로 설계된 압력이다.
+  예측에 직결되는 head 분기 feature 에서는 초반 학습을 망가뜨렸다.
+  **"넥 전용으로 검증된 기법은 head 위치로 이식되지 않는다"** 가 이 시도의 결론이고,
+  기법 축이 위치 축과 독립이 아니라는 증거이기도 하다.
+- 구현·config·프로브 기록(sum reduction 이라 kd_loss 원값이 task 의 26배, 두 번 잰 weight 산출)은
+  전부 git 히스토리에 있다 — 복구는 `git log --all --oneline -- "*fgd*"` 로 커밋을 찾으면 된다.
+- 부산물 둘은 남았다: **MuSGD 의 3-D norm weight 버그 수정**([§7.11](#711-3-d-파라미터는-muon-그룹에-들어가-musgd-를-죽인다--프로브에서는-안-보인다-수정됨))과
+  **kd_loss 가중 로그** (아래 기록 관례).
 
-#### MGD·FGD 는 한 축만 다른 비교가 아니다
+#### MGD 는 한 축만 다른 비교가 아니다
 
 MSE·PKD 런 대비 **① 정렬부**(ConvBNSiLU → 1×1 Conv), **② 랜덤 마스킹**, **③ 생성 블록** 셋이 함께 바뀐다.
 증류 경로 파라미터 실측(head`.1` 6지점 = box 64→64 ×3, cls 64→128 ×3):
@@ -359,19 +355,12 @@ MSE·PKD 런 대비 **① 정렬부**(ConvBNSiLU → 1×1 Conv), **② 랜덤 �
 |---|---:|---:|---:|
 | `ConvBNSiLUAligner` (MSE·PKD) | 100,608 | 1× | 3.2% |
 | `MGDAligner` (1×1 + 생성 블록) | 1,132,032 | **11.3×** | **35.9%** |
-| FGD (align 1×1 ×3 + GcBlock 2벌 ×6) | 151,884 | 1.51× | 4.8% |
 
 MGD 의 배율은 커널(3×3 vs 1×1)에서 9배, 폭에서 1.3배가 곱해진 값이다. 추론 때 버려지지만 학습 중
 증류 경로에 그만한 용량이 얹힌다. **MGD 라는 방법의 정의라 피할 수 없다** — 결과에 이 단서를 달고,
 MGD 가 이기면 `aligner_args: {lambda_mgd: 0.0}` 런(생성 블록은 두고 마스킹만 끔)을 추가해
 **λ=0.65 vs λ=0 차이 = 마스킹 순효과**로 가른다.
 → **결과: MGD 0.6501 ≈ MSE 0.6496 (+0.05pt, 노이즈 안).** 이기지 못했으므로 λ=0 런은 켜지 않는다.
-
-FGD 는 용량 문제는 작지만(1.51×) 다른 세 가지가 겹친다. **① off-label** — FGD 는 넥(FPN) feature
-전용으로 설계·검증됐고 head 중간 특징에 대한 논문 근거가 없다. 기법 축을 유지하기 위한 의도적
-선택이고, 지면 기법 탓인지 위치 탓인지 가를 수 없다. **② 다축 변화** — 정렬부(ConvBNSiLU → FGD 내부
-1×1)·attention 가중·GcBlock 이 함께 바뀐다. **③ 입력 정보량** — GT box 를 쓰는 유일한 수준이라
-feature 만 보는 나머지 셋과 증류에 들어가는 정보 자체가 다르다 (이기면 이것도 원인 후보다).
 
 #### weight 는 여기서도 프로브로 맞춘다
 
@@ -382,17 +371,13 @@ w = (kd_mse / task_mse) × task_method / kd_method       (w_mse = 1)
 ```
 
 기준값은 과거 기록이 아니라 프로브의 mse 런에서 새로 뽑는다. 같은 세션·같은 조건이라 비교가 깨끗하다.
-task loss 가 mse/pkd/mgd 에서 4.554/4.554/4.556 으로 사실상 같아, 식은 실질적으로 **`w = kd_mse / kd_method`** 다
-(fgd 만 예외 — 아래 두 번 잰 이야기 참조).
+task loss 가 세 런에서 4.554/4.554/4.556 으로 사실상 같아, 식은 실질적으로 **`w = kd_mse / kd_method`** 다.
 
-> **기록 관례 변경 — kd_loss 로그는 FGD 런부터 weight 를 곱한 값이다.** 원값은 기법마다 자릿수가
-> 제각각이라(pkd 0.6 vs fgd 117) 로그에서 KD 비중을 읽을 수 없었다. weight 곱한 값은 task loss 와
-> 같은 스케일이라 진행바에서 바로 비교된다. **그 전 런들(mse·pkd·mgd 본 런 포함)의 results.csv 는
-> 원값**이고, 이 README 의 kd_loss 궤적 서술도 전부 원값 기준이다. 프로브는 config 의 weight 로
-> 되나눠 원값을 JSON 에 기록하므로 weight 산출 공식은 그대로다.
-
-FGD 통합 리팩터(KD loss 호출 시그니처 변경) 후 mse 를 재프로브했더니 kd_loss 가 이전 측정과
-**소수점 15자리까지 동일**하게 재현됐다 — 학습이 결정적이라 가능한, 기존 경로 무변경의 가장 강한 증거다.
+> **기록 관례 변경 — kd_loss 로그는 커밋 `322f754d` 부터 weight 를 곱한 값이다.** 원값은 기법마다
+> 자릿수가 제각각이라(pkd 0.6 vs mse 5.3, 폐기한 fgd 는 117) 로그에서 KD 비중을 읽을 수 없었다.
+> weight 곱한 값은 task loss 와 같은 스케일이라 진행바에서 바로 비교된다. **그 전 런들(mse·pkd·mgd
+> 본 런 포함)의 results.csv 는 원값**이고, 이 README 의 kd_loss 궤적 서술도 전부 원값 기준이다.
+> 프로브는 config 의 weight 로 되나눠 원값을 JSON 에 기록하므로 weight 산출 공식은 그대로다.
 
 ```bash
 .venv/Scripts/python.exe scripts/voc/probe_kd_scale.py
@@ -406,24 +391,13 @@ FGD 통합 리팩터(KD loss 호출 시그니처 변경) 후 mse 를 재프로�
 | mse | 5.2608 | 53.6% | 1.000 | **1.0** | 53.6% | 2.68 GB | 9.9 |
 | pkd | 0.6476 | 12.4% | 8.124 | **8.0** | 53.2% | 2.84 GB | 10.2 |
 | mgd | 3.7226 | 45.0% | 1.414 | **1.4** | 53.4% | 2.59 GB | 10.2 |
-| fgd | 117.53 | 96.0% | 0.0477 | **0.05** | 54.8% | 2.90 GB | 10.4 |
 
-네 기법의 초기 KD 비중이 **53.2~54.8%, 1.6pt 안에 모였다.** PKD 는 `1 − r` 이라 1 부근에 갇혀 MSE 의 1/8 이고,
+세 기법의 초기 KD 비중이 **0.4pt 안에 모였다.** PKD 는 `1 − r` 이라 1 부근에 갇혀 MSE 의 1/8 이고,
 정규화 없이 돌렸으면 12.4% 로 사실상 KD 를 절반쯤 끈 셈이 됐을 것이다.
 MGD 가 같은 MSE 인데도 낮은 건 생성 블록이 teacher feature 를 직접 맞추도록 학습되기 때문이다.
-FGD 는 반대 극단이다 — sum reduction 이라 task 의 26배이고, 정규화 없이는 KD 비중 96% 로
-학습이 사실상 KD 만 남는다. **정규화 규칙이 1/8 배(pkd)부터 26배(fgd)까지, 자릿수로 3칸을 한 기준에 묶었다.**
 
-> **FGD 만 프로브를 두 번 돌렸다.** w=1.0 첫 프로브(JSON 의 `fgd_w1p0`)에서 KD 비중이 95% 가 되어
-> task_loss 까지 오염됐다(6.15 vs 정상 4.55) — 공식의 task 항이 오염되면 w 가 35% 과대추정된다.
-> 보정 추정치 0.046 으로 재프로브해 정상 조건에서 확정했다. kd_loss 자체는 두 측정에서 115.1/117.5 로
-> 2% 차이라 weight 의존성이 거의 없었고, 오염은 task 쪽에만 있었다.
-> 다른 기법은 w=1.0 프로브에서도 KD 비중이 12~54% 라 이 문제가 없었다.
-
-**MGD 의 비용은 예상보다 작다** — 에폭 시간이 MSE 대비 +3%, VRAM 은 넷 다 2.6~2.9GB 로
-6.1GB 대비 여유가 있다. batch 16 을 그대로 간다. FGD 는 GT 마스크 계산 때문에 처음엔 +97%(17.9분)였는데,
-per-box 파이썬 루프를 브로드캐스트 max 로 벡터화해(수식 동일 — 레퍼런스와 diff 0 유지) +15%(10.4분)로
-내렸다. 100에폭 기준 약 12시간 절약이다.
+**MGD 의 비용은 예상보다 작다** — 에폭 시간이 MSE 대비 +3%, VRAM 은 셋 다 2.6~2.8GB 로
+6.1GB 대비 여유가 있다. batch 16 을 그대로 간다.
 
 > **프로브는 AdamW 로 돌았다** — `optimizer=auto` 가 `iterations > 10000` 에서만 MuSGD 를 고르는데
 > 1에폭은 1,035 iteration 이다 ([§7.3](#73-optimizerauto-는-100에폭에서-musgd-를-고른다)).
@@ -434,11 +408,7 @@ per-box 파이썬 루프를 브로드캐스트 max 로 벡터화해(수식 동�
 
 #### 실행
 
-```bash
-.venv/Scripts/python.exe scripts/voc/kd_head1/train_yolov8n_from_8s_coco_fgd.py
-```
-
-(PKD·MGD 런은 완료 — 결과는 [§6](#6-실험-결과).)
+기법 3수준 모두 완료 — 결과는 [§6](#6-실험-결과). 스크립트는 `scripts/voc/kd_head1/train_yolov8n_from_8s_coco{,_pkd,_mgd}.py`.
 
 ### 증류 지점
 
@@ -534,7 +504,7 @@ YOLO(model.trainer.best).val(project=PROJECT, name="val", ...)
 
 #### 기법 축은 variant 뒤에 붙인다
 
-Phase 3 에서 축이 하나 늘었다. `yolov8n_from_8s_coco_pkd` / `_mgd` / `_fgd` 처럼 **teacher 뒤에 기법을 붙인다.**
+Phase 3 에서 축이 하나 늘었다. `yolov8n_from_8s_coco_pkd` / `_mgd` 처럼 **teacher 뒤에 기법을 붙인다.**
 
 접미사가 없으면 MSE 다 — teacher 규칙과 같은 논리로, 기준 수준을 접미사 없는 쪽에 둔다.
 표면상 variant 가 teacher 와 기법 두 축을 담는 것처럼 보이지만, **기법 스윕 안에서 teacher 는 s-COCO 로
@@ -738,7 +708,7 @@ teacher 출처 × 위치 교호작용이 없다는 미검증 가정 위에 있�
 | MSE (기준) | 1.0 | 0.8499 | 0.6496 | 0.8287 | 0.7732 | — |
 | **PKD** | 8.0 | 0.8565 | **0.6533** | 0.8303 | 0.7844 | **+0.37pt** |
 | MGD | 1.4 | 0.8519 | 0.6501 | 0.8224 | 0.7837 | +0.05pt |
-| FGD | 0.05 | — | — | — | — | 대기 |
+| FGD | 0.05 | — | — | — | — | ep2 중단 ([§4](#fgd-는-시도-후-중단했다)) |
 
 **PKD 의 +0.37pt 는 실재하지만 작다.** 100에폭 전부에서 MSE 를 앞섰고(100/100) 격차가 부호를 바꾼 적이
 없다 — 이 일관성이 최종값 차이보다 강한 근거다. 다만 크기는 [§1 노이즈 기준](#결과-해석-시-주의)(0.3pt)을
@@ -757,8 +727,9 @@ teacher activation 의 크기까지 맞추는 것(MSE)보다 채널별 패턴만
 이 위치에서는 더 나은 신호라는 증거다.
 
 세 런 모두 `epochs=100, batch=16, imgsz=640, patience=30, amp=True` 동일, early stopping 없음
-(best epoch 100/99/100). 기법 축의 해석 한계(MGD·FGD 의 다축 변화, FGD 의 off-label)는
-[§4](#mgdfgd-는-한-축만-다른-비교가-아니다) 참조.
+(best epoch 100/99/100). 기법 축의 해석 한계(MGD 의 다축 변화)는
+[§4](#mgd-는-한-축만-다른-비교가-아니다) 참조. 4번째로 시도한 FGD 는 ep1/ep2 가 역대 초반 밴드 밖으로
+떨어져 중단했다 — off-label(넥 전용 기법의 head 적용) 리스크의 현실화, 상세는 [§4](#fgd-는-시도-후-중단했다).
 
 ### KD — 이전 회차 (50에폭, batch 32, teacher **COCO-pretrained** `yolov8s.pt`)
 
@@ -983,31 +954,7 @@ if loss_name not in loss_map:
 `KDFeatureLoss` 의 `or` 기본값 자체는 그대로 뒀다 — `loss_fn=None` 의 문서화된 동작이고,
 상류에서 막으면 충분하다.
 
-### 7.11 loss 슬롯의 학습 파라미터는 wrapper 등록 없이는 조용히 얼어붙는다
-
-옵티마이저는 `_build_train_pipeline` → `build_optimizer(model=self.model)` 로 **`self.model` 을
-순회해서만** 만들어진다. aligner 가 학습되는 것도 `DistillationWrapper` 에 실려 있기 때문이지,
-aligner 라서가 아니다.
-
-FGD 처럼 **loss 모듈에 학습 파라미터가 있는 기법**(GcBlock 2벌 + 내부 align conv)을
-`self.kd_loss_fn = FGDFeatureLoss(...)` 로만 두면 — 아무 오류 없이 학습이 돌고, kd_loss 도 찍히고,
-grad 도 계산되지만 **옵티마이저가 그 파라미터를 모르므로 step 이 적용되지 않는다.**
-GcBlock 이 초기값에 얼어붙은 채 13시간을 돌고, 결과를 "FGD 를 적용한 것"으로 착각하게 된다.
-7.10 의 MSE 폴백과 같은 부류다 — 오타/누락이 실패가 아니라 *다른 실험*으로 나타난다.
-
-그래서 `_setup_kd_loss` 를 wrap **전에** 호출하도록 순서를 바꾸고, `nn.Module` 인 loss 는
-wrapper 에 등록한다:
-
-```python
-kd_loss_module = self.kd_loss_fn if isinstance(self.kd_loss_fn, nn.Module) else None
-self.model = DistillationWrapper(self.model, self.aligner_module, kd_loss_module)
-```
-
-검증도 이 지점을 겨눴다 — FGD 파라미터 102개 전부가 `wrapper.parameters()` 에 포함되는 것을
-확인하는 테스트가 이 통합에서 가장 중요한 항목이다. EMA·checkpoint(`kd_loss_last.pt`)도
-같은 경로를 탄다. 무상태 loss(mse/pkd)는 `nn.Module` 이 아니어서(`KDFeatureLoss`) 기존과 동일하다.
-
-### 7.12 3-D 파라미터는 Muon 그룹에 들어가 MuSGD 를 죽인다 — 프로브에서는 안 보인다 (수정됨)
+### 7.11 3-D 파라미터는 Muon 그룹에 들어가 MuSGD 를 죽인다 — 프로브에서는 안 보인다 (수정됨)
 
 FGD 본 런이 첫 optimizer step 에서 죽었다:
 
@@ -1030,3 +977,6 @@ AdamW 를 고른다([§7.3](#73-optimizerauto-는-100에폭에서-musgd-를-고�
 수정: norm 검사를 muon 검사 앞으로 옮겼다 — norm weight 는 차원과 무관하게 직교화 대상이 아니다.
 yolov8n/s 전 파라미터를 전수 확인해 **이 순서 변경으로 그룹이 바뀌는 기존 파라미터는 0개**임을
 확인했다 (2-D 이상 norm weight 가 FGD 전에는 존재하지 않았다).
+
+FGD 자체는 이후 폐기했지만([§4](#fgd-는-시도-후-중단했다)) 이 수정은 FGD 와 무관한 upstream
+잠재 버그라 유지한다 — 앞으로 어떤 모듈이든 2-D 이상 norm weight 를 들여오면 같은 지점에서 죽었을 것이다.
