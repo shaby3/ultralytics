@@ -510,7 +510,10 @@ def create_distiller(trainer_cls):
                             self.tloss = (
                                 self.loss_items if self.tloss is None else (self.tloss * i + self.loss_items) / (i + 1)
                             )
-                            kd_val = kd_loss.detach().item()
+                            # weight 를 곱한 값을 기록한다 — 로그의 kd_loss 가 task loss 와 같은 스케일이라야
+                            # KD 비중을 눈으로 읽을 수 있다 (FGD 는 원값이 세 자릿수라 특히 그렇다).
+                            # 원값이 필요한 곳(프로브)은 config 의 weight 로 되나눈다. README §4.
+                            kd_val = kd_loss.detach().item() * self.kd_weight
                             self.tkd_loss = kd_val if self.tkd_loss is None else (self.tkd_loss * i + kd_val) / (i + 1)
 
                         # Backward

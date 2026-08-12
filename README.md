@@ -385,6 +385,12 @@ w = (kd_mse / task_mse) × task_method / kd_method       (w_mse = 1)
 task loss 가 mse/pkd/mgd 에서 4.554/4.554/4.556 으로 사실상 같아, 식은 실질적으로 **`w = kd_mse / kd_method`** 다
 (fgd 만 예외 — 아래 두 번 잰 이야기 참조).
 
+> **기록 관례 변경 — kd_loss 로그는 FGD 런부터 weight 를 곱한 값이다.** 원값은 기법마다 자릿수가
+> 제각각이라(pkd 0.6 vs fgd 117) 로그에서 KD 비중을 읽을 수 없었다. weight 곱한 값은 task loss 와
+> 같은 스케일이라 진행바에서 바로 비교된다. **그 전 런들(mse·pkd·mgd 본 런 포함)의 results.csv 는
+> 원값**이고, 이 README 의 kd_loss 궤적 서술도 전부 원값 기준이다. 프로브는 config 의 weight 로
+> 되나눠 원값을 JSON 에 기록하므로 weight 산출 공식은 그대로다.
+
 FGD 통합 리팩터(KD loss 호출 시그니처 변경) 후 mse 를 재프로브했더니 kd_loss 가 이전 측정과
 **소수점 15자리까지 동일**하게 재현됐다 — 학습이 결정적이라 가능한, 기존 경로 무변경의 가장 강한 증거다.
 
