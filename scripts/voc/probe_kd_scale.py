@@ -38,6 +38,7 @@ CONFIGS = {
     "mse": "ultralytics/cfg/distill_head1_from_8s_coco.yaml",  # 기준 + 회귀 검사
     "pkd": "ultralytics/cfg/distill_head1_from_8s_coco_pkd.yaml",
     "mgd": "ultralytics/cfg/distill_head1_from_8s_coco_mgd.yaml",
+    "amse": "ultralytics/cfg/distill_head1_from_8s_coco_amse.yaml",
 }
 
 

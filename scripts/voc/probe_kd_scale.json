@@ -22,5 +22,21 @@
     "peak_vram_gb": 2.677734375,
     "minutes": 9.056438640753429,
     "config": "ultralytics/cfg/distill_head1_from_8s_coco.yaml"
+  },
+  "amse_w1p0": {
+    "kd_loss": 78.05211046006944,
+    "task_loss": 5.915829658508301,
+    "kd_share": 0.9295465668187871,
+    "peak_vram_gb": 2.802734375,
+    "minutes": 6.171568735440572,
+    "config": "ultralytics/cfg/distill_head1_from_8s_coco_amse.yaml"
+  },
+  "amse": {
+    "kd_loss": 79.67874445155053,
+    "task_loss": 4.741785049438477,
+    "kd_share": 0.9438313751706221,
+    "peak_vram_gb": 2.802734375,
+    "minutes": 10.95880558093389,
+    "config": "ultralytics/cfg/distill_head1_from_8s_coco_amse.yaml"
   }
 }
