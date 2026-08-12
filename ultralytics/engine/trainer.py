@@ -995,13 +995,17 @@ class BaseTrainer:
         for module_name, module in unwrap_model(model).named_modules():
             for param_name, param in module.named_parameters(recurse=False):
                 fullname = f"{module_name}.{param_name}" if module_name else param_name
-                if param.ndim >= 2 and use_muon:
-                    g[3][fullname] = param  # muon params
-                elif "bias" in fullname:  # bias (no decay)
+                # norm 검사가 muon 검사보다 먼저여야 한다. norm weight 는 차원과 무관하게 직교화
+                # 대상이 아닌데, ndim 조건이 앞서면 3-D norm weight(예: LayerNorm([C,1,1]))가 Muon
+                # 그룹에 들어가 muon_update 의 2-D assert 에서 죽는다. YOLO 본체의 norm weight 는
+                # 전부 1-D 라 이 순서 변경으로 그룹이 바뀌는 기존 파라미터는 없다.
+                if "bias" in fullname:  # bias (no decay)
                     g[2][fullname] = param
                 elif isinstance(module, bn) or "logit_scale" in fullname:  # weight (no decay)
                     # ContrastiveHead and BNContrastiveHead included here with 'logit_scale'
                     g[1][fullname] = param
+                elif param.ndim >= 2 and use_muon:
+                    g[3][fullname] = param  # muon params
                 else:  # weight (with decay)
                     g[0][fullname] = param
         if not use_muon:

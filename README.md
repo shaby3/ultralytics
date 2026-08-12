@@ -1000,3 +1000,27 @@ self.model = DistillationWrapper(self.model, self.aligner_module, kd_loss_module
 검증도 이 지점을 겨눴다 — FGD 파라미터 102개 전부가 `wrapper.parameters()` 에 포함되는 것을
 확인하는 테스트가 이 통합에서 가장 중요한 항목이다. EMA·checkpoint(`kd_loss_last.pt`)도
 같은 경로를 탄다. 무상태 loss(mse/pkd)는 `nn.Module` 이 아니어서(`KDFeatureLoss`) 기존과 동일하다.
+
+### 7.12 3-D 파라미터는 Muon 그룹에 들어가 MuSGD 를 죽인다 — 프로브에서는 안 보인다 (수정됨)
+
+FGD 본 런이 첫 optimizer step 에서 죽었다:
+
+```
+File "ultralytics/optim/muon.py", line 37, in zeropower_via_newtonschulz5
+    assert len(G.shape) == 2
+```
+
+`build_optimizer` 의 그룹 분배가 `param.ndim >= 2` 를 **norm 레이어 검사보다 먼저** 봐서,
+FGD GcBlock 의 `LayerNorm([C/2,1,1])` weight(**3-D**)가 Muon 그룹에 들어갔다.
+`muon_update` 는 4-D(conv)만 2-D 로 접고 3-D 는 그대로 넘겨 assert 에 걸린다.
+YOLO 본체의 norm weight 는 전부 1-D 라 이 경로가 한 번도 밟힌 적이 없었다 — upstream 의 잠재 버그를
+FGD 가 처음 노출한 것이다.
+
+**프로브가 못 잡는 이유가 이 함정의 핵심이다.** `optimizer=auto` 는 1에폭(1,035 iter < 10,000)에서
+AdamW 를 고른다([§7.3](#73-optimizerauto-는-100에폭에서-musgd-를-고른다)). AdamW 는 파라미터 shape 을
+가리지 않으므로 프로브 2회가 전부 통과했고, MuSGD 를 고르는 본 런에서만 터졌다.
+**새 모듈 shape 이 들어오면 프로브 통과 ≠ 본 런 통과다.**
+
+수정: norm 검사를 muon 검사 앞으로 옮겼다 — norm weight 는 차원과 무관하게 직교화 대상이 아니다.
+yolov8n/s 전 파라미터를 전수 확인해 **이 순서 변경으로 그룹이 바뀌는 기존 파라미터는 0개**임을
+확인했다 (2-D 이상 norm weight 가 FGD 전에는 존재하지 않았다).
