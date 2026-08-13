@@ -248,9 +248,28 @@ def create_distiller(trainer_cls):
 
         def _setup_kd_loss(self):
             """Initialize KD feature loss function."""
-            from ultralytics.utils.loss import AMSELoss, KDFeatureLoss, PKDLoss
+            from ultralytics.utils.loss import AMSELoss, KDFeatureLoss, PKDLoss, QMSEFeatureLoss
 
             loss_name = self.distill_cfg.get("loss", "mse")
+
+            # qmse 는 KDFeatureLoss 를 거치지 않는 컨테이너형 loss 다 — 지점별 branch 매핑(cv2->iou,
+            # cv3->score)과 batch(GT)·teacher 예측이 필요하다. 파라미터는 없어서 wrapper 등록은 불필요.
+            if loss_name == "qmse":
+                mask_types = []
+                for layer in self.distill_cfg["student"].get("layers") or []:
+                    name = str(layer)
+                    if "cv2" in name:
+                        mask_types.append("iou")  # box 분기 — 회귀 품질(IoU)로 가중
+                    elif "cv3" in name:
+                        mask_types.append("score")  # cls 분기 — 분류 확신도로 가중
+                    else:
+                        raise ValueError(
+                            f"qmse is head-branch-only: layer '{name}' is neither cv2 (box) nor cv3 (cls). "
+                            "Use mse/pkd for neck distillation points."
+                        )
+                LOGGER.info(f"QMSE mask types: {mask_types}")
+                self.kd_loss_fn = QMSEFeatureLoss(mask_types)
+                return
             # reduction 은 전부 mean 으로 통일한다. 참조 구현들이 쓰는 sum/N + 고유 alpha 관례를 섞으면
             # 정규화 체계가 둘이 되어, 위치별로 실측해 맞춘 기존 weight 기준과 비교가 끊긴다 (README §4).
             # amse 의 T=1.0 — 클래스 기본값(FGD 논문의 0.5)은 head feature 에서 채널 가중이 one-hot 으로
@@ -259,7 +278,7 @@ def create_distiller(trainer_cls):
             # 미등록 이름을 조용히 넘기면 KDFeatureLoss 의 `loss_fn or MSELoss()` 가 MSE 로 되돌려서,
             # 오타 하나로 13시간을 MSE 로 돌고 결과를 다른 기법으로 착각하게 된다. aligner 쪽과 같이 막는다.
             if loss_name not in loss_map:
-                raise ValueError(f"Unknown KD loss '{loss_name}'. Available losses: {sorted(loss_map)}")
+                raise ValueError(f"Unknown KD loss '{loss_name}'. Available losses: {sorted(loss_map) + ['qmse']}")
             self.kd_loss_fn = KDFeatureLoss(loss_fn=loss_map[loss_name])
 
         # --- Training setup override ---
@@ -458,10 +477,12 @@ def create_distiller(trainer_cls):
                         with autocast(self.amp):
                             batch = self.preprocess_batch(batch)
 
-                            # Teacher forward (no grad) - hooks capture features
+                            # Teacher forward (no grad) - hooks capture features.
+                            # 반환값(eval 출력 = 디코딩된 박스+score)은 qmse 의 품질 마스크가 쓴다 —
+                            # 어차피 계산되고 버려지던 값이라 추가 비용이 없다.
                             self._teacher_feats.clear()
                             with torch.no_grad():
-                                self.teacher(batch["img"])
+                                teacher_out = self.teacher(batch["img"])
 
                             # Student forward - hooks capture features + task loss
                             self._student_feats.clear()
@@ -471,9 +492,12 @@ def create_distiller(trainer_cls):
                             else:
                                 loss, self.loss_items = self.model(batch)
 
-                            # Align student features and compute KD loss
+                            # Align student features and compute KD loss.
+                            # batch 와 teacher 예측은 품질 마스크가 필요한 loss(qmse)만 소비하고 나머지는 무시한다.
                             aligned_feats = unwrap_model(self.model).aligner(self._student_feats)
-                            kd_loss = self.kd_loss_fn(aligned_feats, self._teacher_feats)
+                            kd_loss = self.kd_loss_fn(
+                                aligned_feats, self._teacher_feats, batch=batch, teacher_preds=teacher_out
+                            )
                             self.loss = loss.sum() + self.kd_weight * kd_loss * batch["img"].shape[0]
 
                             if RANK != -1:

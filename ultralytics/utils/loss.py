@@ -1347,6 +1347,96 @@ class AMSELoss(nn.Module):
         return (w_s * w_c * (s - t) ** 2).mean()
 
 
+class QMSEFeatureLoss(nn.Module):
+    """Prediction-quality-weighted MSE feature distillation loss, branch-specific masks.
+
+    Follow-up to AMSE (which weighted by activation magnitude and lost to plain MSE by
+    -0.66pt): here the weighting criterion is the *quality of the teacher's predictions*.
+    Each distillation point gets the mask matching what its branch predicts — box-branch
+    (cv2) points are weighted by the IoU between the teacher's decoded box at each position
+    and the best-overlapping GT, cls-branch (cv3) points by the teacher's max class score.
+    The cls/reg mask split is borrowed from PGD (https://arxiv.org/abs/2203.05469), but this
+    is NOT a PGD port: PGD selects top-k positions by s^(1-a)*IoU^a, fits a 2D Gaussian over
+    them, and applies FGD-style fg/bg+attention losses. Here the component masks are used
+    directly as all-pixel soft weights — no top-k, no Gaussian, no fg/bg, no attention.
+
+    Masks are built from teacher predictions (+ GT for IoU) only, under no_grad — constants
+    the student cannot game. Each mask is normalized to mean 1 per image/point, so the loss
+    stays a weighted mean inside this repo's mean-reduction convention and reduces to plain
+    MSE for a uniform mask. Parameter-free, but unlike the losses wrapped by KDFeatureLoss it
+    needs the batch (GT), the teacher's decoded predictions, and the per-point branch mapping,
+    so it replaces KDFeatureLoss as a container. No spatial-softmax and no channel weighting —
+    the axes that degenerated for AMSE are absent by construction.
+    """
+
+    def __init__(self, mask_types: list[str]):
+        """Initialize QMSEFeatureLoss.
+
+        Args:
+            mask_types (list[str]): Per-distillation-point mask kind, "iou" (box branch) or
+                "score" (cls branch), in the same order as the configured layers.
+        """
+        super().__init__()
+        assert mask_types and set(mask_types) <= {"iou", "score"}, f"invalid mask_types: {mask_types}"
+        self.mask_types = list(mask_types)
+
+    def forward(self, student_feats, teacher_feats, batch=None, teacher_preds=None):
+        """Compute mean quality-weighted MSE across all distillation points.
+
+        Args:
+            student_feats (list[torch.Tensor]): Aligned student feature maps.
+            teacher_feats (list[torch.Tensor]): Teacher feature maps (will be detached).
+            batch (dict): Training batch; needs "img", "bboxes" (normalized xywh), "batch_idx".
+            teacher_preds: Teacher eval-mode output; element 0 is (B, 4+nc, A) with decoded
+                xywh pixel boxes and sigmoided class scores, anchors ordered P3->P4->P5 row-major.
+
+        Returns:
+            torch.Tensor: Scalar loss in fp32.
+        """
+        assert batch is not None and teacher_preds is not None, "QMSE needs the batch and teacher predictions"
+        assert len(self.mask_types) == len(student_feats), (
+            f"mask_types ({len(self.mask_types)}) and distillation points ({len(student_feats)}) mismatch"
+        )
+        y = (teacher_preds[0] if isinstance(teacher_preds, (tuple, list)) else teacher_preds).float()
+        device = y.device
+        score_all = y[:, 4:].amax(dim=1)  # (B, A) — 클래스 max. teacher 가 COCO(nc=80)면 80클래스 기준 확신도다
+        pred_xyxy = xywh2xyxy(y[:, :4].permute(0, 2, 1))  # (B, A, 4) 픽셀 xyxy
+
+        # 이미지별 GT 를 픽셀 xyxy 로, 위치별 IoU = 예측 박스 vs 이미지 내 전체 GT 의 max
+        img_h, img_w = batch["img"].shape[-2:]
+        gt = xywh2xyxy(batch["bboxes"].to(device).float()) * torch.tensor(
+            [img_w, img_h, img_w, img_h], device=device
+        )
+        batch_idx = batch["batch_idx"].to(device).view(-1)
+        iou_all = torch.zeros_like(score_all)
+        for i in range(score_all.shape[0]):
+            g = gt[batch_idx == i]
+            if len(g):
+                # (A,1,4) x (1,G,4) -> (A,G) — 위치당 최고 IoU 하나. 어느 GT 인지는 쓰지 않는다 (할당이 아니라 품질)
+                iou_all[i] = bbox_iou(pred_xyxy[i].unsqueeze(1), g.unsqueeze(0), xywh=False).squeeze(-1).amax(dim=1)
+            # GT 없는 이미지는 0 으로 남는다 — 아래 정규화 가드가 균등 마스크로 바꾼다
+
+        # anchor 배열의 스케일별 구간: feature (H,W) 큰 순서(P3->P4->P5)가 make_anchors 순서와 같다
+        sizes = sorted({tuple(f.shape[-2:]) for f in teacher_feats}, key=lambda s: -(s[0] * s[1]))
+        offsets, start = {}, 0
+        for h, w in sizes:
+            offsets[(h, w)] = (start, start + h * w)
+            start += h * w
+        assert start == score_all.shape[1], f"anchor 수 불일치: 지점 {start} vs teacher 출력 {score_all.shape[1]}"
+
+        loss = 0
+        for mask_type, sf, tf in zip(self.mask_types, student_feats, teacher_feats):
+            n, _, h, w = tf.shape
+            s0, s1 = offsets[(h, w)]
+            mask = (iou_all if mask_type == "iou" else score_all)[:, s0:s1].view(n, 1, h, w)
+            # 이미지별 평균 1 정규화 — 가중 평균이 되어 균등 마스크면 일반 MSE 로 환원된다.
+            # 평균이 0 근처(빈 GT 이미지의 IoU 마스크)면 균등 마스크로 대체한다.
+            mean = mask.mean(dim=(2, 3), keepdim=True)
+            mask = torch.where(mean > 1e-6, mask / mean.clamp(min=1e-6), torch.ones_like(mask))
+            loss = loss + (mask * (sf.float() - tf.detach().float()) ** 2).mean()
+        return loss / len(student_feats)
+
+
 class KDFeatureLoss:
     """Feature-level Knowledge Distillation loss.
 
@@ -1362,12 +1452,16 @@ class KDFeatureLoss:
         """
         self.loss_fn = loss_fn or nn.MSELoss(reduction="mean")
 
-    def __call__(self, student_feats, teacher_feats):
+    def __call__(self, student_feats, teacher_feats, batch=None, teacher_preds=None):
         """Compute mean feature distillation loss across all distillation points.
 
         Args:
             student_feats (list[torch.Tensor]): Aligned student feature maps.
             teacher_feats (list[torch.Tensor]): Teacher feature maps (will be detached).
+            batch (dict, optional): Ignored. Accepted so the trainer can call every KD loss with
+                the same signature — QMSEFeatureLoss actually consumes it for GT boxes.
+            teacher_preds (optional): Ignored. Same reason — QMSEFeatureLoss uses the teacher's
+                decoded predictions for its quality masks.
 
         Returns:
             torch.Tensor: Scalar loss value.
