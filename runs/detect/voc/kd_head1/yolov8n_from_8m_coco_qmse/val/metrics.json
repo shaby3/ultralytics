@@ -1,0 +1,25 @@
+{
+  "metrics/precision(B)": 0.8248116618074167,
+  "metrics/recall(B)": 0.7810570512463466,
+  "metrics/mAP50(B)": 0.8548655235857584,
+  "metrics/mAP50-95(B)": 0.6516775502952354,
+  "fitness": 0.6516775502952354,
+  "speed": {
+    "preprocess": 1.1774532714020705,
+    "inference": 2.917748404706652,
+    "loss": 0.0006621365214627302,
+    "postprocess": 1.4703409733394706
+  },
+  "val_args": {
+    "data": "VOC.yaml",
+    "imgsz": 640,
+    "batch": 32,
+    "workers": 2,
+    "device": 0,
+    "conf": 0.001,
+    "iou": 0.7,
+    "max_det": 300,
+    "half": false,
+    "rect": true
+  }
+}
