@@ -62,5 +62,13 @@
     "peak_vram_gb": 3.265625,
     "minutes": 10.163083533445993,
     "config": "ultralytics/cfg/distill_head1_from_8m_coco_qmse.yaml"
+  },
+  "pkd_8m": {
+    "kd_loss": 0.5775324883956262,
+    "task_loss": 4.615037441253662,
+    "kd_share": 0.11122286193931594,
+    "peak_vram_gb": 3.275390625,
+    "minutes": 10.007138236363728,
+    "config": "ultralytics/cfg/distill_head1_from_8m_coco_pkd.yaml"
   }
 }
