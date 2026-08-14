@@ -42,6 +42,7 @@ CONFIGS = {
     "qmse": "ultralytics/cfg/distill_head1_from_8s_coco_qmse.yaml",
     "pqmse": "ultralytics/cfg/distill_head1_from_8s_coco_pqmse.yaml",
     "qmse_8m": "ultralytics/cfg/distill_head1_from_8m_coco_qmse.yaml",  # teacher 크기 축 (m-COCO x QMSE)
+    "pkd_8m": "ultralytics/cfg/distill_head1_from_8m_coco_pkd.yaml",  # teacher 크기 축 (m-COCO x PKD)
 }
 
 
