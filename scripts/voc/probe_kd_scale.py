@@ -40,6 +40,7 @@ CONFIGS = {
     "mgd": "ultralytics/cfg/distill_head1_from_8s_coco_mgd.yaml",
     "amse": "ultralytics/cfg/distill_head1_from_8s_coco_amse.yaml",
     "qmse": "ultralytics/cfg/distill_head1_from_8s_coco_qmse.yaml",
+    "pqmse": "ultralytics/cfg/distill_head1_from_8s_coco_pqmse.yaml",
 }
 
 
