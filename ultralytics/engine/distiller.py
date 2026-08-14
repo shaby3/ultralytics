@@ -248,9 +248,15 @@ def create_distiller(trainer_cls):
 
         def _setup_kd_loss(self):
             """Initialize KD feature loss function."""
-            from ultralytics.utils.loss import AMSELoss, KDFeatureLoss, PKDLoss, QMSEFeatureLoss
+            from ultralytics.utils.loss import AMSELoss, KDFeatureLoss, PKDLoss, PQMSEFeatureLoss, QMSEFeatureLoss
 
             loss_name = self.distill_cfg.get("loss", "mse")
+
+            # pqmse — PGD 식 결합 품질 마스크 (score_GT클래스^0.5 x IoU^2), 6지점 공통.
+            # qmse 와 같은 컨테이너형(무상태, batch·teacher 예측 사용)이라 같은 호출 경로를 탄다.
+            if loss_name == "pqmse":
+                self.kd_loss_fn = PQMSEFeatureLoss()
+                return
 
             # qmse 는 KDFeatureLoss 를 거치지 않는 컨테이너형 loss 다 — 지점별 branch 매핑(cv2->iou,
             # cv3->score)과 batch(GT)·teacher 예측이 필요하다. 파라미터는 없어서 wrapper 등록은 불필요.
@@ -278,7 +284,7 @@ def create_distiller(trainer_cls):
             # 미등록 이름을 조용히 넘기면 KDFeatureLoss 의 `loss_fn or MSELoss()` 가 MSE 로 되돌려서,
             # 오타 하나로 13시간을 MSE 로 돌고 결과를 다른 기법으로 착각하게 된다. aligner 쪽과 같이 막는다.
             if loss_name not in loss_map:
-                raise ValueError(f"Unknown KD loss '{loss_name}'. Available losses: {sorted(loss_map) + ['qmse']}")
+                raise ValueError(f"Unknown KD loss '{loss_name}'. Available losses: {sorted(loss_map) + ['pqmse', 'qmse']}")
             self.kd_loss_fn = KDFeatureLoss(loss_fn=loss_map[loss_name])
 
         # --- Training setup override ---

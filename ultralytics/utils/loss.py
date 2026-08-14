@@ -1437,6 +1437,99 @@ class QMSEFeatureLoss(nn.Module):
         return loss / len(student_feats)
 
 
+class PQMSEFeatureLoss(nn.Module):
+    """PGD-style combined quality-mask MSE: one mask `score_gtcls^0.5 * IoU^2` for all points.
+
+    Variant of QMSEFeatureLoss along two axes: the per-branch component masks become a single
+    pairwise-combined mask applied to every distillation point, and the score is the teacher's
+    probability for *the GT's class* (as in PGD/TAL pairing) instead of the class max:
+
+        t(pos, gt) = score_gtclass(pos)^0.5 * IoU(pred_box(pos), gt)^2
+        mask(pos)  = max over gt [ t(pos, gt) ]
+
+    Borrowed from PGD (https://arxiv.org/abs/2203.05469) but not a port — PGD selects top-k
+    positions per GT with `s^(1-a)*IoU^a`, fits a 2D Gaussian over them, and applies FGD-style
+    fg/bg+attention losses; here the combined score is an all-pixel soft weight and the
+    exponents (0.5, 2) are a project choice, not PGD's interpolation. IoU is plain IoU
+    (PGD's BboxOverlaps2D default; TAL uses CIoU).
+
+    The teacher is COCO-pretrained (nc=80) while GT labels are VOC indices, so indexing the
+    teacher's class channel goes through VOC_TO_COCO — using VOC indices directly would read
+    the wrong class (person is VOC 14 but COCO 0). Normalization, empty-GT guard, fp32 and
+    teacher-only constants follow QMSEFeatureLoss.
+    """
+
+    # VOC.yaml 클래스 순서(0~19) -> COCO80 채널 인덱스. 이름이 다른 쌍: aeroplane->airplane,
+    # motorbike->motorcycle, sofa->couch, diningtable->dining table, pottedplant->potted plant, tvmonitor->tv
+    VOC_TO_COCO = [4, 1, 14, 8, 39, 5, 2, 15, 56, 19, 60, 16, 17, 3, 0, 58, 18, 57, 6, 62]
+
+    def __init__(self, alpha_score: float = 0.5, beta_iou: float = 2.0):
+        """Initialize PQMSEFeatureLoss.
+
+        Args:
+            alpha_score (float): Exponent on the GT-class score (softens concentration).
+            beta_iou (float): Exponent on the IoU (emphasizes well-regressed positions).
+        """
+        super().__init__()
+        self.alpha_score = alpha_score
+        self.beta_iou = beta_iou
+
+    def forward(self, student_feats, teacher_feats, batch=None, teacher_preds=None):
+        """Compute mean combined-quality-weighted MSE across all distillation points.
+
+        Args:
+            student_feats (list[torch.Tensor]): Aligned student feature maps.
+            teacher_feats (list[torch.Tensor]): Teacher feature maps (will be detached).
+            batch (dict): Training batch; needs "img", "bboxes", "cls" (VOC indices), "batch_idx".
+            teacher_preds: Teacher eval-mode output; element 0 is (B, 4+nc, A) with decoded
+                xywh pixel boxes and sigmoided class scores, anchors ordered P3->P4->P5 row-major.
+
+        Returns:
+            torch.Tensor: Scalar loss in fp32.
+        """
+        assert batch is not None and teacher_preds is not None, "PQMSE needs the batch and teacher predictions"
+        y = (teacher_preds[0] if isinstance(teacher_preds, (tuple, list)) else teacher_preds).float()
+        device = y.device
+        scores = y[:, 4:]  # (B, nc, A) — teacher(COCO) 기준 nc=80
+        pred_xyxy = xywh2xyxy(y[:, :4].permute(0, 2, 1))  # (B, A, 4) 픽셀 xyxy
+
+        img_h, img_w = batch["img"].shape[-2:]
+        gt = xywh2xyxy(batch["bboxes"].to(device).float()) * torch.tensor(
+            [img_w, img_h, img_w, img_h], device=device
+        )
+        gt_cls = batch["cls"].to(device).view(-1).long()
+        batch_idx = batch["batch_idx"].to(device).view(-1)
+        coco_idx = torch.tensor(self.VOC_TO_COCO, device=device)
+
+        mask_all = torch.zeros(y.shape[0], y.shape[2], device=device)  # (B, A)
+        for i in range(y.shape[0]):
+            keep = batch_idx == i
+            g = gt[keep]
+            if not len(g):
+                continue  # 빈 GT 이미지는 0 으로 남는다 — 아래 정규화 가드가 균등 마스크로 바꾼다
+            iou = bbox_iou(pred_xyxy[i].unsqueeze(1), g.unsqueeze(0), xywh=False).squeeze(-1).clamp(min=0)  # (A, G)
+            s = scores[i, coco_idx[gt_cls[keep]]].permute(1, 0)  # (A, G) — 각 GT 의 COCO 클래스 채널
+            # 쌍 단위 결합 후 GT 축 max — "그 GT 의 클래스를 확신하면서 그 GT 를 잘 회귀하는 위치"
+            mask_all[i] = (s**self.alpha_score * iou**self.beta_iou).amax(dim=1)
+
+        sizes = sorted({tuple(f.shape[-2:]) for f in teacher_feats}, key=lambda s: -(s[0] * s[1]))
+        offsets, start = {}, 0
+        for h, w in sizes:
+            offsets[(h, w)] = (start, start + h * w)
+            start += h * w
+        assert start == mask_all.shape[1], f"anchor 수 불일치: 지점 {start} vs teacher 출력 {mask_all.shape[1]}"
+
+        loss = 0
+        for sf, tf in zip(student_feats, teacher_feats):
+            n, _, h, w = tf.shape
+            s0, s1 = offsets[(h, w)]
+            mask = mask_all[:, s0:s1].view(n, 1, h, w)
+            mean = mask.mean(dim=(2, 3), keepdim=True)
+            mask = torch.where(mean > 1e-6, mask / mean.clamp(min=1e-6), torch.ones_like(mask))
+            loss = loss + (mask * (sf.float() - tf.detach().float()) ** 2).mean()
+        return loss / len(student_feats)
+
+
 class KDFeatureLoss:
     """Feature-level Knowledge Distillation loss.
 
