@@ -1,0 +1,40 @@
+# KD config — Detect head 2번째 conv 에서 증류. teacher = **yolov8m** COCO-pretrained. loss = QMSE.
+#
+# teacher 크기 축(Q3) 런. distill_head1_from_8s_coco_qmse.yaml 에서 **teacher.model 한 줄만** 다르다 —
+# 위치·loss·aligner 가 같아 teacher 크기(s->m) 하나만 분리된 비교다. 기법은 기법 축 승자인
+# QMSE(s-COCO 에서 0.6564)로 고정했다.
+#
+# teacher 크기 추이는 3점으로 읽는다: teacher 없음(baseline n 0.6284) -> s(0.6564) -> m(이 런).
+# m 이 더 나쁘면 capacity gap(teacher-student 격차 과대)을 짚는 근거가 된다.
+# 증류 지점 채널: box 64(s 와 동일, student 와도 동일) / cls 192(s 는 128) — cls aligner 가
+# 64->192 로 커진다. nc 는 s/m 모두 COCO 80 이라 QMSE 마스크 로직은 그대로다.
+#
+# QMSE 마스크 정의는 s-COCO config 참조 (box<-IoU, cls<-score 클래스 max, 평균 1 정규화).
+
+teacher:
+  # COCO-pretrained 체크포인트 (repo 루트)
+  model: yolov8m.pt
+  layers:
+    - "model.22.cv2.0.1" # box P3/8
+    - "model.22.cv2.1.1" # box P4/16
+    - "model.22.cv2.2.1" # box P5/32
+    - "model.22.cv3.0.1" # cls P3/8
+    - "model.22.cv3.1.1" # cls P4/16
+    - "model.22.cv3.2.1" # cls P5/32
+
+student:
+  layers:
+    - "model.22.cv2.0.1"
+    - "model.22.cv2.1.1"
+    - "model.22.cv2.2.1"
+    - "model.22.cv3.0.1"
+    - "model.22.cv3.1.1"
+    - "model.22.cv3.2.1"
+
+aligner: ConvBNSiLUAligner # s-COCO QMSE 런과 동일하게 고정 — teacher 크기 하나만 갈린다
+loss: qmse
+# 1에폭 프로브 실측 (scripts/voc/probe_kd_scale.json 의 qmse_8m): kd_loss 원값 9.12 —
+# s-COCO QMSE(9.54)와 비슷한 자릿수라 teacher 크기가 QMSE 마스크 스케일을 크게 바꾸지 않는다.
+# KD 비중 65.9% < 재프로브 기준(80%), 한 번에 확정: 1.1552 x 4.7290 / 9.1200 = 0.599 -> 0.6.
+# 보정 후 초기 KD 비중 53.6% (MSE 53.6% 와 일치). peak VRAM 3.27GB — batch 16 유지 가능 실측.
+weight: 0.6
