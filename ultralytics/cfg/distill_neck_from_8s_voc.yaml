@@ -1,18 +1,21 @@
-# KD config — neck 출력(P3/P4/P5)에서 증류. teacher = yolov8s VOC 학습본.
+# KD config — neck 출력(15/18/21)에서 증류. teacher = yolov8s **VOC 학습본**. loss = MSE.
 #
-# Q2(증류 위치) 비교용 3종 중 하나. distill_head0_/distill_head1_from_8s_voc.yaml 과
-# teacher·aligner·loss 가 같고 layers 와 weight 만 다르다. 비교를 위해 이 대응을 깨지 말 것.
-# weight 는 위치별 kd_loss 실측(1에폭)으로 정규화한 값이다 — README §4 참조.
+# 위치 × teacher 출처 2×2 를 채우는 런. 지금까지 위치 순위(head`.1` > head`.0` > neck)는
+# **s-COCO 에서만** 확인됐고, teacher 를 바꿔도 같은 순위인지는 미검증이었다 (README §1 의
+# "greedy 탐색의 한계"). 이 런이 그 칸을 메운다:
 #
-# 증류 지점: neck 출력 3 지점 (layer 15/18/21 = C2f, Detect 의 입력)
-# 채널 (student n → teacher s): P3 64→128, P4 128→256, P5 256→512
-#   → head(6지점, 64→64·64→128)보다 aligner 가 훨씬 크다. neck 이 이기면 "위치 효과"인지
-#     "aligner 용량 효과"인지 해석에 단서를 달아야 한다.
-# C2f 는 마지막이 cv2 = Conv 이므로 neck 출력도 Conv(Conv2d+BN+SiLU) 출력이다
-#   → head 와 동일한 근거로 ConvBNSiLUAligner 가 맞다.
+#   |        | s-VOC          | s-COCO |
+#   | neck   | **이 런**      | 0.6408 |
+#   | head.1 | 0.6342         | 0.6496 |
+#
+# distill_neck_from_8s_coco.yaml 에서 **teacher.model 한 줄만** 다르고(그리고 프로브로 정한
+# weight), distill_head1_from_8s_voc.yaml 과는 **layers 만** 다르다 — 두 방향 모두 한 축 비교다.
+#
+# 증류 지점은 C2f 출력(넥 3스케일)이라 head 지점과 채널이 다르다: 64/128/256 (s teacher).
+# student(n)는 32/64/128 이라 aligner 가 2배 폭으로 정렬한다.
 
 teacher:
-  # repo 루트에서 실행하는 것을 전제로 한 상대경로 (README §4)
+  # VOC 파인튜닝 체크포인트 (baseline s 런의 best.pt) — COCO 사전학습본과 대조되는 조건
   model: runs/detect/voc/baseline/yolov8s/train/weights/best.pt
   layers:
     - 15 # P3/8
@@ -27,6 +30,12 @@ student:
 
 aligner: ConvBNSiLUAligner # README §4 — teacher feature 가 BN+SiLU 출력이므로 고정
 loss: mse
-# 1에폭 kd_loss 실측: neck 0.318 / head0 0.667 / head1 5.992 (teacher s-VOC, batch 32).
-# head1 을 1.0 기준으로 세 위치의 초기 KD 기여를 맞춘다: 5.992/0.318 ≈ 18.8 → 20 (반올림)
-weight: 20.0
+# 1에폭 프로브 실측 (scripts/voc/probe_kd_scale.json 의 neck_voc): kd_loss 원값 0.2283 —
+# 넥은 head 지점(5.26)의 1/23 이라 weight 가 커야 KD 비중이 맞는다 (위치 스윕에서 확인한 성질).
+# KD 비중 4.7% < 재프로브 기준(80%), 한 번에 확정: 1.1552 x 4.6521 / 0.2283 = 23.54 -> 24
+# (유효숫자 2자리 반올림, +2.0%). 보정 후 초기 KD 비중 54.2%.
+#
+# 주 비교 대상인 head`.1` x s-VOC 런의 KD 비중(54.3%)과 거의 일치한다 — 위치 축이 깨끗하게 갈린다.
+# 다만 neck x s-COCO 런은 weight 20.0(비중 45.6%)이라, "넥에서의 teacher 출처 비교"로 읽을 때는
+# KD 강도 8.6pt 차이가 교락으로 남는다. 이 런의 목적은 어디까지나 위치 축 재확인이다.
+weight: 24.0
