@@ -1,0 +1,2 @@
+C:\Users\SSAFY\datasets\VOC\images\test2007\003076.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\009602.jpg

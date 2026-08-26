@@ -1,0 +1,16 @@
+C:\Users\SSAFY\datasets\VOC\images\test2007\000001.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000002.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000003.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000004.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000006.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000008.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000010.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000011.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000013.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000014.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000015.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000018.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000022.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000025.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000027.jpg
+C:\Users\SSAFY\datasets\VOC\images\test2007\000028.jpg
